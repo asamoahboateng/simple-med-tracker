@@ -130,6 +130,8 @@ jobs:
               (if SmartScreen warns, click "More info" then "Run anyway").
             - **Mac with Apple Silicon (M1 or newer)**: `MedTracker-macOS-AppleSilicon.dmg` (or `.zip`)
             - **Mac with Intel processor**: `MedTracker-macOS-Intel.dmg` (or `.zip`)
-              Open the .dmg and drag MedTracker to Applications. The FIRST time, right-click
-              MedTracker.app and choose **Open** (the app is not signed by Apple).
+              Open the .dmg and drag MedTracker to Applications. The app is not notarized by Apple, so
+              the first time: try to open it, click **Done**, then go to **System Settings -> Privacy &
+              Security** and click **Open Anyway**. (Or run in Terminal:
+              `xattr -dr com.apple.quarantine /Applications/MedTracker.app`)
             - **Linux (x86_64)**: `MedTracker-Linux-x86_64.zip` - unzip and run `MedTracker/MedTracker`.

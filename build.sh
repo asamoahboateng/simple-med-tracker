@@ -43,7 +43,8 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "  dist/MedTracker.app                           (the app itself)"
     echo "  dist/MedTracker-$VERSION-macOS-$ARCH.dmg      (installer to share)"
     echo "  dist/MedTracker-$VERSION-macOS-$ARCH.zip      (zip to share)"
-    echo "First launch on another Mac: right-click MedTracker.app -> Open -> Open."
+    echo "First launch on another Mac: try to open it, then System Settings -> Privacy & Security"
+    echo "-> Open Anyway (or: xattr -dr com.apple.quarantine /Applications/MedTracker.app)."
 else
     echo "==> Creating ZIP"
     (cd dist && rm -f "MedTracker-$VERSION-Linux.zip" && zip -qry "MedTracker-$VERSION-Linux.zip" MedTracker)

@@ -187,10 +187,20 @@ pyinstaller medtracker.spec --noconfirm --clean
 The build uses only what is installed in `.venv`, so it contains just the project's dependencies.
 It opens without a console window. The `build/` folder is temporary and can be deleted.
 
-**macOS:** the app is not signed with an Apple developer certificate. The first time you
-open it, **right-click (or Control-click) MedTracker.app → Open → Open**. After that, a normal
-double-click works. If macOS says the app "is damaged", run
-`xattr -dr com.apple.quarantine /Applications/MedTracker.app` once in Terminal.
+**macOS:** the app is not signed or notarized with a paid Apple Developer account. So the first
+time you open a downloaded copy, macOS says *"Apple could not verify 'MedTracker' is free of malware…"*.
+To allow it (once per copy):
+1. Try to open MedTracker once, then click **Done**.
+2. Open **System Settings → Privacy & Security**, scroll down to **Security**, click **Open Anyway**,
+   and confirm with your password or Touch ID.
+
+Or run this once in Terminal (it also fixes an *"app is damaged"* message):
+```
+xattr -dr com.apple.quarantine /Applications/MedTracker.app
+```
+(On macOS 14 and older, **right-click MedTracker.app → Open → Open** also works.) To remove the
+warning for everyone, the app must be signed and notarized, which requires a paid Apple Developer
+Program membership (US$99 a year).
 A Mac build runs on the same kind of processor it was built on: Apple Silicon or Intel.
 
 **Windows:** SmartScreen may warn about an unknown publisher. Click **More info → Run anyway**.
