@@ -17,6 +17,11 @@ on:
 permissions:
   contents: write           # needed to create the release
 
+# Only one build per tag at a time: a newer run for the same tag cancels the older one.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build (${{ matrix.os }})
