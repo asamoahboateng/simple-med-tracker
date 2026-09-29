@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+
+# PyInstaller output
+build/
+dist/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Databases (real data lives in the user data folder, but never commit any)
+*.db
+*.db-wal
+*.db-shm
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/

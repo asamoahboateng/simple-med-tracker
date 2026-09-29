@@ -1,0 +1,130 @@
+# Build MedTracker for Windows, macOS and Linux whenever a version tag is pushed.
+#
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# Each runner creates a .venv, installs the pinned requirements, runs the tests,
+# builds with PyInstaller, and the three builds are attached to a GitHub Release.
+
+name: Build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:        # also allows a manual run from the Actions tab (no release)
+
+permissions:
+  contents: write           # needed to create the release
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest          # Windows 10/11, 64-bit
+            asset: MedTracker-Windows.exe
+          - os: macos-latest            # Apple Silicon Macs (M1 and newer)
+            asset: MedTracker-macOS-AppleSilicon.zip
+          - os: macos-15-intel          # Intel Macs
+            asset: MedTracker-macOS-Intel.zip
+          - os: ubuntu-22.04            # older glibc = runs on more Linux versions
+            asset: MedTracker-Linux-x86_64.zip
+    defaults:
+      run:
+        shell: bash           # same commands on every OS (Git Bash on Windows)
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Linux system libraries needed by Qt
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 \
+            libfontconfig1 libdbus-1-3 libglib2.0-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 \
+            libxcb-shape0 libxcb-xinerama0 zip
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Select the .venv Python
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "VENV_PY=.venv/Scripts/python.exe" >> "$GITHUB_ENV"
+          else
+            echo "VENV_PY=.venv/bin/python" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install requirements into .venv
+        run: |
+          "$VENV_PY" -m pip install --upgrade pip
+          "$VENV_PY" -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: '"$VENV_PY" -m pytest'
+
+      - name: Build with PyInstaller
+        run: '"$VENV_PY" -m PyInstaller medtracker.spec --noconfirm --clean'
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: cp dist/MedTracker.exe "${{ matrix.asset }}"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        # ditto keeps the .app's symlinks and permissions intact; also make a .dmg installer
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/MedTracker.app "${{ matrix.asset }}"
+          mkdir dmg && cp -R dist/MedTracker.app dmg/ && ln -s /Applications dmg/Applications
+          DMG="${{ matrix.asset }}"; DMG="${DMG%.zip}.dmg"
+          hdiutil create -volname MedTracker -srcfolder dmg -ov -format UDZO "$DMG"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: cd dist && zip -r -y "../${{ matrix.asset }}" MedTracker
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            MedTracker-macOS-*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all builds
+        uses: actions/download-artifact@v4
+        with:
+          path: builds
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MedTracker ${{ github.ref_name }}
+          files: builds/*
+          body: |
+            Downloads:
+            - **Windows 10/11**: `MedTracker-Windows.exe` - double-click to run
+              (if SmartScreen warns, click "More info" then "Run anyway").
+            - **Mac with Apple Silicon (M1 or newer)**: `MedTracker-macOS-AppleSilicon.dmg` (or `.zip`)
+            - **Mac with Intel processor**: `MedTracker-macOS-Intel.dmg` (or `.zip`)
+              Open the .dmg and drag MedTracker to Applications. The FIRST time, right-click
+              MedTracker.app and choose **Open** (the app is not signed by Apple).
+            - **Linux (x86_64)**: `MedTracker-Linux-x86_64.zip` - unzip and run `MedTracker/MedTracker`.
