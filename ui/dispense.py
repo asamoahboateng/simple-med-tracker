@@ -9,7 +9,7 @@ import db
 import logic
 from ui import theme
 from ui.widgets import (
-    SearchComboBox, ask_yes_no, dialog_header, make_date_edit, show_error, style_dialog_buttons,
+    SearchComboBox, dialog_header, make_date_edit, show_error, style_dialog_buttons,
     to_py_date,
 )
 
@@ -39,8 +39,8 @@ class DispenseDialog(QDialog):
         self.batch_combo.addItem(AUTOMATIC, None)
 
         self.patient_edit = QLineEdit()
-        self.patient_edit.setPlaceholderText("e.g. P00123")
-        self.prescriber_combo = SearchComboBox("Name of prescriber")
+        self.patient_edit.setPlaceholderText("Optional, e.g. P00123")
+        self.prescriber_combo = SearchComboBox("Optional, name of prescriber")
         self.prescriber_combo.set_items(db.prescribers(conn), keep_text=False)
 
         form = QFormLayout()
@@ -108,14 +108,6 @@ class DispenseDialog(QDialog):
     def save(self):
         patient = self.patient_edit.text().strip()
         prescriber = self.prescriber_combo.text()
-        missing = [label for label, value in (("Patient ID", patient), ("Prescriber", prescriber))
-                   if not value]
-        if missing and not ask_yes_no(
-                self, f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} blank.\n\n"
-                      f"Save this entry anyway?",
-                title="Missing details", yes_text="Save anyway", no_text="Go back"):
-            return
-
         try:
             result = logic.dispense(
                 self.conn, to_py_date(self.date_edit.date()), self.medicine_combo.text(),
