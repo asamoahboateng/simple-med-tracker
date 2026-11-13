@@ -1,12 +1,12 @@
 """ui/medicine.py - The "New Medicine" dialog (adds a medicine with no stock yet)."""
 
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout,
+    QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout,
 )
 
 import logic
-from config import COMMON_UNITS
 from ui import theme
+from ui.units import unit_picker
 from ui.widgets import dialog_header, show_error, show_info, style_dialog_buttons
 
 
@@ -19,9 +19,7 @@ class NewMedicineDialog(QDialog):
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("e.g. Paracetamol 500mg")
-        self.unit_combo = QComboBox()
-        self.unit_combo.setEditable(True)
-        self.unit_combo.addItems(COMMON_UNITS)
+        unit_box, self.unit_combo = unit_picker(conn, self)
         self.reorder_spin = QSpinBox()
         self.reorder_spin.setRange(0, 10_000_000)
         self.reorder_spin.setValue(10)
@@ -33,7 +31,7 @@ class NewMedicineDialog(QDialog):
 
         form = QFormLayout()
         form.addRow("Medicine name:", self.name_edit)
-        form.addRow("Unit:", self.unit_combo)
+        form.addRow("Unit:", unit_box)
         form.addRow("Reorder level:", self.reorder_spin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)

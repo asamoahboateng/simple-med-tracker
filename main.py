@@ -108,9 +108,46 @@ def main(argv=None) -> int:
         import demo_data
         demo_data.seed_demo(conn)
 
-    from ui.main_window import MainWindow  # imported late so errors above show nicely
-    window = MainWindow(conn, path, demo=args.demo)
-    window.show()
+    # imported late so errors above show nicely
+    from ui.login import LoginDialog
+    from ui.main_window import MainWindow
+
+    # Closing the main window quits; signing out closes it and shows the sign-in again.
+    app.setQuitOnLastWindowClosed(False)
+    windows = []        # keep a reference to the open window
+
+    def open_window(user, previous=None):
+        window = MainWindow(conn, path, user, demo=args.demo)
+        window.signed_out.connect(on_signed_out)
+        window.restyle_requested.connect(lambda: open_window(window.user, previous=window))
+        windows[:] = [window]
+        if previous is None:
+            window.show()
+            return
+        # Same user, new colours: replace the window where it was, on the same page.
+        window.setGeometry(previous.geometry())
+        window.sidebar.setCurrentRow(previous.sidebar.currentRow())
+        window.showMaximized() if previous.isMaximized() else window.show()
+        previous.signing_out = True     # close it without quitting or signing out
+        previous.close()
+
+    def start_session(notice: str = "") -> bool:
+        login = LoginDialog(conn, demo=args.demo, notice=notice)
+        if not login.exec():
+            return False
+        log.info("Signed in: %s (%s)", login.user.username, login.user.role)
+        open_window(login.user)
+        return True
+
+    def on_signed_out(message: str):
+        log.info("Signed out")
+        if not start_session(message):
+            conn.close()
+            app.quit()
+
+    if not start_session():
+        conn.close()
+        return 0
     return app.exec()
 
 

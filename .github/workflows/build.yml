@@ -1,10 +1,16 @@
-# Build MedTracker for Windows, macOS and Linux whenever a version tag is pushed.
+# Build MedTracker whenever a version tag is pushed. Windows is always built;
+# macOS and Linux only when asked for in the tag (or tagged commit) message:
 #
-#   git tag v1.0.0
+#   git tag v1.0.0                                   # Windows only
+#   git tag -a v1.0.0 -m "include mac"               # Windows + macOS
+#   git tag -a v1.0.0 -m "include mac linux"         # Windows + macOS + Linux
+#   git tag -a v1.0.0 -m "include all"               # same as above
 #   git push origin v1.0.0
 #
+# A manual run from the Actions tab has checkboxes for macOS and Linux instead.
+#
 # Each runner creates a .venv, installs the pinned requirements, runs the tests,
-# builds with PyInstaller, and the three builds are attached to a GitHub Release.
+# builds with PyInstaller, and the builds are attached to a GitHub Release.
 
 name: Build
 
@@ -13,6 +19,15 @@ on:
     tags:
       - "v*"
   workflow_dispatch:        # also allows a manual run from the Actions tab (no release)
+    inputs:
+      include_mac:
+        description: Also build macOS (Apple Silicon + Intel)
+        type: boolean
+        default: false
+      include_linux:
+        description: Also build Linux
+        type: boolean
+        default: false
 
 permissions:
   contents: write           # needed to create the release
@@ -23,21 +38,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  platforms:
+    name: Choose platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Check out code
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+
+      - name: Pick platforms
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          IN_MAC: ${{ inputs.include_mac }}
+          IN_LINUX: ${{ inputs.include_linux }}
+        run: |
+          mac=false; linux=false
+          if [ "$EVENT" = "push" ]; then
+            # Read the tag message (annotated tags) and the tagged commit's message.
+            git fetch --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
+            msg=$(git tag -l --format='%(contents)' "$TAG"; git log -1 --format=%B "$TAG")
+            msg=$(echo "$msg" | tr '[:upper:]' '[:lower:]')
+            if echo "$msg" | grep -Eq 'include.*\b(all)\b'; then mac=true; linux=true; fi
+            if echo "$msg" | grep -Eq 'include.*\b(mac|macos)\b'; then mac=true; fi
+            if echo "$msg" | grep -Eq 'include.*\b(linux)\b'; then linux=true; fi
+          else
+            mac="$IN_MAC"; linux="$IN_LINUX"
+          fi
+
+          entries='{"os":"windows-latest","asset":"MedTracker-Windows.exe"}'
+          if [ "$mac" = "true" ]; then
+            entries="$entries"',{"os":"macos-latest","asset":"MedTracker-macOS-AppleSilicon.zip"}'
+            entries="$entries"',{"os":"macos-15-intel","asset":"MedTracker-macOS-Intel.zip"}'
+          fi
+          if [ "$linux" = "true" ]; then
+            entries="$entries"',{"os":"ubuntu-22.04","asset":"MedTracker-Linux-x86_64.zip"}'
+          fi
+          echo "Building: Windows$([ "$mac" = true ] && echo ', macOS')$([ "$linux" = true ] && echo ', Linux')"
+          echo "matrix={\"include\":[$entries]}" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.os }})
+    needs: platforms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest          # Windows 10/11, 64-bit
-            asset: MedTracker-Windows.exe
-          - os: macos-latest            # Apple Silicon Macs (M1 and newer)
-            asset: MedTracker-macOS-AppleSilicon.zip
-          - os: macos-15-intel          # Intel Macs
-            asset: MedTracker-macOS-Intel.zip
-          - os: ubuntu-22.04            # older glibc = runs on more Linux versions
-            asset: MedTracker-Linux-x86_64.zip
+      # windows-latest: Windows 10/11, 64-bit
+      # macos-latest: Apple Silicon Macs (M1 and newer); macos-15-intel: Intel Macs
+      # ubuntu-22.04: older glibc = runs on more Linux versions
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
     defaults:
       run:
         shell: bash           # same commands on every OS (Git Bash on Windows)
@@ -125,7 +177,7 @@ jobs:
           name: MedTracker ${{ github.ref_name }}
           files: builds/*
           body: |
-            Downloads:
+            Downloads (only the platforms built for this release are attached):
             - **Windows 10/11**: `MedTracker-Windows.exe` - double-click to run
               (if SmartScreen warns, click "More info" then "Run anyway").
             - **Mac with Apple Silicon (M1 or newer)**: `MedTracker-macOS-AppleSilicon.dmg` (or `.zip`)

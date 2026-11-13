@@ -46,7 +46,7 @@ def export_table(rows: list[dict], columns: list[tuple[str, str]], path) -> Path
 # Column definitions shared by the report page, Excel export and PDF.
 REPORT_MEDICINE_COLUMNS = [
     ("rank", "Rank"), ("medicine", "Medicine"), ("dispensed", "Qty dispensed"),
-    ("percent", "% of month"), ("received", "Qty received"),
+    ("percent", "% of total"), ("received", "Qty received"),
     ("stock", "Current stock"), ("status", "Status"),
 ]
 REPORT_PRESCRIBER_COLUMNS = [("prescriber", "Prescriber"), ("qty", "Total quantity"),
@@ -54,23 +54,29 @@ REPORT_PRESCRIBER_COLUMNS = [("prescriber", "Prescriber"), ("qty", "Total quanti
 REPORT_DAY_COLUMNS = [("date", "Date"), ("qty", "Quantity dispensed")]
 
 
-def summary_pairs(report: logic.MonthlyReport) -> list[tuple[str, object]]:
-    return [
-        ("Month", report.title),
+def summary_pairs(report: logic.PeriodReport) -> list[tuple[str, object]]:
+    pairs = [
+        ("Month" if report.is_month else "Period", report.title),
+        ("Days counted", report.days_counted),
         ("Total dispensed", report.total_dispensed),
         ("Total stock received", report.total_received),
+        ("Deliveries", report.deliveries),
         ("Dispensing entries", report.entry_count),
         ("Different medicines dispensed", report.medicines_dispensed),
         (f"Average dispensed per day ({report.days_counted} days)", report.avg_per_day),
     ]
+    if report.change_vs_prev is not None:
+        pairs.append((f"Per day compared with {report.prev_title}",
+                      f"{report.change_vs_prev:+d}% ({report.prev_avg_per_day} per day)"))
+    return pairs
 
 
-def top_day_rows(report: logic.MonthlyReport) -> list[dict]:
+def top_day_rows(report: logic.PeriodReport) -> list[dict]:
     return [{"date": d.isoformat(), "qty": q} for d, q in report.top_days]
 
 
-def export_report_excel(report: logic.MonthlyReport, path) -> Path:
-    """Save the whole monthly report to one Excel file with several sheets."""
+def export_report_excel(report: logic.PeriodReport, path) -> Path:
+    """Save the whole report (a month or a date range) to one Excel file with several sheets."""
     import pandas as pd
     path = Path(path)
     if path.suffix.lower() != ".xlsx":
@@ -91,7 +97,7 @@ def export_report_excel(report: logic.MonthlyReport, path) -> Path:
 
 def _html_table(rows: list[dict], columns: list[tuple[str, str]]) -> str:
     if not rows:
-        return "<p><i>No data for this month.</i></p>"
+        return "<p><i>No data for this period.</i></p>"
     head = "".join(f"<th align='left' bgcolor='#e8eef3'>{html.escape(h)}</th>"
                    for _, h in columns)
     body = "".join(
@@ -103,14 +109,14 @@ def _html_table(rows: list[dict], columns: list[tuple[str, str]]) -> str:
             f"<tr>{head}</tr>{body}</table>")
 
 
-def report_html(report: logic.MonthlyReport, app_name: str, chart_src: str | None = None) -> str:
-    """Printable HTML version of the monthly report (used for the PDF)."""
+def report_html(report: logic.PeriodReport, app_name: str, chart_src: str | None = None) -> str:
+    """Printable HTML version of the report (used for the PDF)."""
     summary = "".join(f"<tr><td>{html.escape(k)}</td><td><b>{html.escape(str(v))}</b></td></tr>"
                       for k, v in summary_pairs(report))
     chart = f"<p><img src='{chart_src}' width='640'></p>" if chart_src else ""
     return f"""
     <html><body style='font-family: sans-serif; font-size: 10pt;'>
-    <h2>{html.escape(app_name)} - Monthly report: {html.escape(report.title)}</h2>
+    <h2>{html.escape(app_name)} - Report: {html.escape(report.title)}</h2>
     <h3>Summary</h3>
     <table border='1' cellspacing='0' cellpadding='4'>{summary}</table>
     <h3>Top 10 medicines</h3>

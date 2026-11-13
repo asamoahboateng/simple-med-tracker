@@ -27,6 +27,7 @@ LOG_COLUMNS = [
     Column("prescriber", "Prescriber"),
     Column("balance_after", "Balance After", "right", int_fmt),
     Column("entered_at", "Entered At"),
+    Column("entered_by", "Entered By"),
 ]
 
 

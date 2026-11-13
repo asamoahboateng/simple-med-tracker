@@ -4,14 +4,14 @@ from datetime import date
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QCompleter, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QLabel, QLineEdit,
+    QCompleter, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QLabel, QLineEdit,
     QSpinBox, QVBoxLayout,
 )
 
 import db
 import logic
-from config import COMMON_UNITS
 from ui import theme
+from ui.units import unit_picker
 from ui.widgets import (
     dialog_header, style_dialog_buttons,
     OptionalDateEdit, SearchComboBox, ask_yes_no, make_date_edit, show_error, show_info,
@@ -22,9 +22,10 @@ MAX_QTY = 10_000_000
 
 
 class AddStockDialog(QDialog):
-    def __init__(self, conn, parent=None):
+    def __init__(self, conn, parent=None, entered_by: str = ""):
         super().__init__(parent)
         self.conn = conn
+        self.entered_by = entered_by
         self.setWindowTitle("Add Stock")
         self.setMinimumWidth(560)
 
@@ -49,14 +50,12 @@ class AddStockDialog(QDialog):
         # Extra fields shown only when the medicine is new.
         self.new_box = QGroupBox("New medicine - please also enter:")
         new_form = QFormLayout(self.new_box)
-        self.unit_combo = QComboBox()
-        self.unit_combo.setEditable(True)
-        self.unit_combo.addItems(COMMON_UNITS)
+        unit_box, self.unit_combo = unit_picker(conn, self)
         self.reorder_spin = QSpinBox()
         self.reorder_spin.setRange(0, MAX_QTY)
         self.reorder_spin.setValue(10)
         self.reorder_spin.setToolTip("Show a LOW STOCK warning when stock falls to this level")
-        new_form.addRow("Unit:", self.unit_combo)
+        new_form.addRow("Unit:", unit_box)
         new_form.addRow("Reorder level:", self.reorder_spin)
 
         self.form = form = QFormLayout()
@@ -151,7 +150,8 @@ class AddStockDialog(QDialog):
 
             result = logic.add_stock(
                 self.conn, stock_date, name, self.qty_spin.value(), batch_no, expiry,
-                unit=self.unit_combo.currentText(), reorder_level=self.reorder_spin.value())
+                unit=self.unit_combo.currentText(), reorder_level=self.reorder_spin.value(),
+                entered_by=self.entered_by)
         except logic.ValidationError as exc:
             show_error(self, str(exc))
             return

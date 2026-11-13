@@ -268,7 +268,8 @@ def check_add_stock(conn, stock_date, medicine_name, batch_no, expiry_date) -> A
 
 def add_stock(conn, stock_date, medicine_name, quantity, batch_no, expiry_date,
               unit: str | None = None, reorder_level: int | None = None,
-              today: date | None = None, now: datetime | None = None) -> AddStockResult:
+              today: date | None = None, now: datetime | None = None,
+              entered_by: str = "") -> AddStockResult:
     """
     Record stock received. Creates the medicine (needs unit + reorder level)
     and/or the batch if they are new. If the batch already exists, its
@@ -288,6 +289,7 @@ def add_stock(conn, stock_date, medicine_name, quantity, batch_no, expiry_date,
         if created_medicine:
             unit = require_text(unit, "Unit (for a new medicine)")
             level = validate_reorder_level(0 if reorder_level is None else reorder_level)
+            db.add_unit(conn, unit)
             med = db.get_medicine(conn, db.create_medicine(conn, medicine_name, unit, level))
 
         batch = db.find_batch(conn, med["id"], batch_no)
@@ -304,6 +306,7 @@ def add_stock(conn, stock_date, medicine_name, quantity, batch_no, expiry_date,
             conn, tx_date=stock_date.isoformat(), medicine_id=med["id"], batch_id=batch_id,
             tx_type=STOCK_IN, quantity=quantity, balance_after=new_stock,
             entry_group=uuid.uuid4().hex, entered_at=_now_text(now),
+            entered_by=clean(entered_by),
         )
 
     return AddStockResult(
@@ -339,7 +342,8 @@ class DispenseResult:
 
 def dispense(conn, dispense_date, medicine_name, quantity, batch_no: str | None = None,
              patient_id: str = "", prescriber: str = "",
-             today: date | None = None, now: datetime | None = None) -> DispenseResult:
+             today: date | None = None, now: datetime | None = None,
+             entered_by: str = "") -> DispenseResult:
     """
     Record medicine dispensed.
 
@@ -387,6 +391,7 @@ def dispense(conn, dispense_date, medicine_name, quantity, batch_no: str | None 
                 batch_id=alloc.batch_id, tx_type=DISPENSED, quantity=alloc.quantity,
                 balance_after=balance, entry_group=group, entered_at=entered_at,
                 patient_id=clean(patient_id), prescriber=clean(prescriber),
+                entered_by=clean(entered_by),
             )
 
     return DispenseResult(
@@ -431,16 +436,79 @@ def create_medicine(conn, name, unit, reorder_level=0) -> int:
         existing = db.find_medicine(conn, name)
         if existing is not None:
             raise ValidationError(f"'{existing['name']}' already exists.")
+        db.add_unit(conn, unit)                 # a unit typed here joins the list
         return db.create_medicine(conn, name, unit, level)
 
 
 def update_medicine_settings(conn, medicine_id: int, unit=None, reorder_level=None) -> None:
-    """Edit a medicine's unit and/or reorder level (the only editable fields)."""
+    """Edit a medicine's unit and/or reorder level."""
     if unit is not None:
         unit = require_text(unit, "Unit")
+        db.add_unit(conn, unit)
     if reorder_level is not None:
         reorder_level = validate_reorder_level(reorder_level)
     db.update_medicine(conn, medicine_id, unit=unit, reorder_level=reorder_level)
+
+
+# --------------------------------------------------------------------------
+# Units (the choices in the Unit drop-downs)
+# --------------------------------------------------------------------------
+
+MAX_UNIT_LENGTH = 30
+
+
+def unit_names(conn) -> list[str]:
+    return db.list_units(conn)
+
+
+def add_unit(conn, name) -> str:
+    """Add a unit to the list. Returns it as saved (trimmed)."""
+    name = " ".join(require_text(name, "Unit").split())
+    if len(name) > MAX_UNIT_LENGTH:
+        raise ValidationError(f"Keep the unit under {MAX_UNIT_LENGTH} characters.")
+    if any(u.casefold() == name.casefold() for u in db.list_units(conn)):
+        raise ValidationError(f"'{name}' is already in the list.")
+    db.add_unit(conn, name)
+    return name
+
+
+def remove_unit(conn, name) -> None:
+    """Take a unit off the list. Not allowed while any medicine uses it."""
+    in_use = db.medicines_using_unit(conn, name)
+    if in_use:
+        raise ValidationError(
+            f"'{name.strip()}' can't be removed because {in_use:,} "
+            f"{'medicine uses' if in_use == 1 else 'medicines use'} it. Change their unit on "
+            f"Stock & Batches first.")
+    db.remove_unit(conn, name)
+
+
+def rename_medicine(conn, medicine_id: int, new_name) -> None:
+    """Rename a medicine. Its history follows it, since transactions link by id."""
+    new_name = require_text(new_name, "Medicine name")
+    with db.transaction(conn):
+        existing = db.find_medicine(conn, new_name)
+        if existing is not None and existing["id"] != medicine_id:
+            raise ValidationError(f"'{existing['name']}' already exists.")
+        db.update_medicine(conn, medicine_id, name=new_name)
+
+
+def update_batch(conn, batch_id: int, batch_no=None, expiry_date=None) -> None:
+    """Correct a batch's number and/or expiry date. Applies to all its stock."""
+    if batch_no is not None:
+        batch_no = require_text(batch_no, "Batch number")
+    if expiry_date is not None:
+        expiry_date = to_date(expiry_date).isoformat()
+    with db.transaction(conn):
+        batch = db.get_batch(conn, batch_id)
+        if batch is None:
+            raise ValidationError("This batch no longer exists.")
+        if batch_no is not None:
+            existing = db.find_batch(conn, batch["medicine_id"], batch_no)
+            if existing is not None and existing["id"] != batch_id:
+                raise ValidationError(
+                    f"Batch '{existing['batch_no']}' already exists for this medicine.")
+        db.update_batch(conn, batch_id, batch_no=batch_no, expiry_date=expiry_date)
 
 
 # --------------------------------------------------------------------------
@@ -508,7 +576,11 @@ class DashboardData:
     low_or_out_count: int
     expiry_alert_count: int
     top_dispensed: list[tuple[str, int]]           # (medicine, qty) - top 10
-    lowest_stock: list[tuple[str, int, str]]       # (medicine, stock, status) - 15 lowest
+    running_low: list[dict]                        # in stock, closest to reorder level - 10
+    expiry_timeline: list[dict]                    # expired + next 12 months, see expiry_timeline()
+    medicine_health: dict[str, int]                # medicine status -> count
+    batch_health: dict[str, int]                   # batch status -> count (batches with stock)
+    reorder_levels_set: int                        # medicines with a reorder level above 0
     daily: list[tuple[date, int]]                  # current month, 1st day up to today
     stock_alerts: list[dict] = field(default_factory=list)
     expiry_alerts: list[dict] = field(default_factory=list)
@@ -524,11 +596,13 @@ def dashboard_data(conn, today: date | None = None) -> DashboardData:
     stock_alerts.sort(key=lambda m: (m["stock"], m["name"].casefold()))
 
     # Only batches that still have stock matter for expiry alerts.
-    expiry_alerts = [b for b in batch_rows(conn, today)
-                     if b["status"] in (BATCH_EXPIRED, BATCH_EXPIRING)]
+    batches = [b for b in batch_rows(conn, today) if b["status"] != BATCH_USED_UP]
+    expiry_alerts = [b for b in batches if b["status"] in (BATCH_EXPIRED, BATCH_EXPIRING)]
     expiry_alerts.sort(key=lambda b: b["expiry"])
 
-    lowest = sorted(medicines, key=lambda m: (m["stock"], m["name"].casefold()))[:15]
+    # Medicines still in stock, ordered by how close they are to their reorder level.
+    running_low = [m for m in medicines if m["stock"] > 0 and m["reorder_level"] > 0]
+    running_low.sort(key=lambda m: (m["stock"] / m["reorder_level"], m["name"].casefold()))
 
     return DashboardData(
         dispensed_this_month=db.total_quantity(conn, DISPENSED, s, e),
@@ -537,50 +611,147 @@ def dashboard_data(conn, today: date | None = None) -> DashboardData:
         expiry_alert_count=len(expiry_alerts),
         top_dispensed=[(r["name"], int(r["qty"]))
                        for r in db.quantity_by_medicine(conn, DISPENSED, s, e)[:10]],
-        lowest_stock=[(m["name"], m["stock"], m["status"]) for m in lowest],
+        running_low=running_low[:10],
+        expiry_timeline=expiry_timeline(batches, today),
+        medicine_health={status: sum(m["status"] == status for m in medicines)
+                         for status in (STATUS_OK, STATUS_LOW, STATUS_OUT)},
+        batch_health={status: sum(b["status"] == status for b in batches)
+                      for status in (BATCH_OK, BATCH_EXPIRING, BATCH_EXPIRED)},
+        reorder_levels_set=sum(m["reorder_level"] > 0 for m in medicines),
         daily=daily_series(conn, start, min(end, today)),
         stock_alerts=stock_alerts,
         expiry_alerts=expiry_alerts,
     )
 
 
+def expiry_timeline(batches: list[dict], today: date, months: int = 12) -> list[dict]:
+    """
+    Batches with stock grouped by when they expire: an "Expired" bucket, then one bucket
+    per calendar month for the next `months` months, starting with the current one.
+
+    Each bucket: {"label": "Nov" / "Expired", "year": "2026" / "", "status", "batches"},
+    where status says whether the month falls inside the expiry warning period.
+    """
+    expired = sorted((b for b in batches if b["status"] == BATCH_EXPIRED),
+                     key=lambda b: b["expiry"])
+    buckets = [{"label": "Expired", "year": "", "status": BATCH_EXPIRED, "batches": expired}]
+    warn_until = today + timedelta(days=EXPIRY_WARNING_DAYS)
+    year, month = today.year, today.month
+    for _ in range(months):
+        first = date(year, month, 1)
+        in_month = sorted((b for b in batches if b["status"] != BATCH_EXPIRED
+                           and to_date(b["expiry"]).replace(day=1) == first),
+                          key=lambda b: (b["expiry"], b["medicine"].casefold()))
+        buckets.append({"label": first.strftime("%b"), "year": str(year),
+                        "status": BATCH_EXPIRING if first <= warn_until else BATCH_OK,
+                        "batches": in_month})
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return buckets
+
 # --------------------------------------------------------------------------
-# Monthly report
+# Report for a month or any date range
 # --------------------------------------------------------------------------
 
+COVER_CAP_DAYS = 365          # "days of stock left" beyond this shows as "over a year"
+
+
 @dataclass
-class MonthlyReport:
-    year: int
-    month: int
+class PeriodReport:
+    start: date
+    end: date                              # last day counted (never after today)
+    calendar_end: date                     # last day to draw: the month's end in month mode
+    is_month: bool
     total_dispensed: int
     total_received: int
-    entry_count: int
+    deliveries: int                        # stock-in entries
+    entry_count: int                       # dispensing entries
     medicines_dispensed: int
     days_counted: int
     avg_per_day: float
-    medicines: list[dict]                 # ranked table rows
-    top_days: list[tuple[date, int]]      # top 5 busiest days
-    prescribers: list[dict]               # prescriber, qty, entries
+    medicines: list[dict]                  # ranked table rows
+    top_days: list[tuple[date, int]]       # top 5 busiest days
+    prescribers: list[dict]                # prescriber, qty, entries
+    daily: list[tuple[date, int]]          # every day from start to end
+    hourly: dict[int, int]                 # dispensing entries per hour of the day
+    weekday_avg: list[float]               # Monday..Sunday, finished days only
+    weekday_days: list[int]                # how many finished days each average covers
+    stock_cover: list[dict]                # shortest first: medicine, stock, per_day, days
+    prev_start: date | None = None         # the period it is compared with (None: no records)
+    prev_end: date | None = None
+    prev_daily: list[tuple[date, int]] = field(default_factory=list)
+    prev_avg_per_day: float | None = None
+
+    @property
+    def year(self) -> int:
+        return self.start.year
+
+    @property
+    def month(self) -> int:
+        return self.start.month
 
     @property
     def title(self) -> str:
-        return f"{calendar.month_name[self.month]} {self.year}"
+        if self.is_month:
+            return f"{calendar.month_name[self.start.month]} {self.start.year}"
+        return f"{_long_date(self.start, self.end.year)} to {_long_date(self.end)}"
+
+    @property
+    def prev_title(self) -> str:
+        if self.prev_start is None:
+            return ""
+        if self.is_month:
+            return calendar.month_name[self.prev_start.month]
+        n = (self.prev_end - self.prev_start).days + 1
+        return "the previous day" if n == 1 else f"the previous {n} days"
+
+    @property
+    def file_stem(self) -> str:
+        if self.is_month:
+            return f"{self.start.year}-{self.start.month:02d}"
+        return f"{self.start.isoformat()}_to_{self.end.isoformat()}"
+
+    @property
+    def change_vs_prev(self) -> int | None:
+        """Per-day change against the comparison period, in whole percent."""
+        if not self.prev_avg_per_day:
+            return None
+        return round(100 * (self.avg_per_day - self.prev_avg_per_day) / self.prev_avg_per_day)
 
 
-def monthly_report(conn, year: int, month: int, today: date | None = None) -> MonthlyReport:
+def _long_date(d: date, omit_year: int | None = None) -> str:
+    text = f"{d.day} {calendar.month_name[d.month]}"
+    return text if d.year == omit_year else f"{text} {d.year}"
+
+
+def period_report(conn, start, end, today: date | None = None,
+                  is_month: bool = False) -> PeriodReport:
+    """
+    Dispensing report for start..end (inclusive). Days after today are not counted.
+    The comparison period is the previous calendar month in month mode, otherwise the
+    same number of days just before `start`. It is left out when there are no
+    records that far back.
+    """
     today = today or date.today()
-    start, end = month_bounds(year, month)
+    start, calendar_end = to_date(start), to_date(end)
+    if start > calendar_end:
+        raise ValidationError("The start date is after the end date.")
+    if start > today:
+        raise ValidationError("The start date is in the future.")
+    end = min(calendar_end, today)
+    if not is_month:
+        calendar_end = end
     s, e = start.isoformat(), end.isoformat()
 
     dispensed = {r["id"]: int(r["qty"]) for r in db.quantity_by_medicine(conn, DISPENSED, s, e)}
     received = {r["id"]: int(r["qty"]) for r in db.quantity_by_medicine(conn, STOCK_IN, s, e)}
     total_dispensed = sum(dispensed.values())
     total_received = sum(received.values())
+    days_counted = (end - start).days + 1
 
-    rows = []
+    rows, cover = [], []
     for m in medicine_rows(conn):
         if m["id"] not in dispensed and m["id"] not in received:
-            continue  # no activity this month
+            continue  # no activity in this period
         qty = dispensed.get(m["id"], 0)
         rows.append({
             "medicine": m["name"], "unit": m["unit"], "dispensed": qty,
@@ -588,29 +759,59 @@ def monthly_report(conn, year: int, month: int, today: date | None = None) -> Mo
             "received": received.get(m["id"], 0),
             "stock": m["stock"], "status": m["status"],
         })
+        if qty:
+            per_day = qty / days_counted
+            cover.append({"medicine": m["name"], "stock": m["stock"], "per_day": per_day,
+                          "days": max(m["stock"], 0) / per_day})
     rows.sort(key=lambda r: (-r["dispensed"], r["medicine"].casefold()))
     for rank, r in enumerate(rows, start=1):
         r["rank"] = rank
-
-    # Average per day: over the days elapsed so far for the current month,
-    # over the whole month for past months.
-    if start <= today <= end:
-        days_counted = today.day
-    else:
-        days_counted = (end - start).days + 1
+    cover.sort(key=lambda c: (c["days"], c["medicine"].casefold()))
 
     daily = daily_series(conn, start, end)
     top_days = sorted((d for d in daily if d[1] > 0), key=lambda d: (-d[1], d[0]))[:5]
 
-    return MonthlyReport(
-        year=year, month=month,
+    sums, counts = [0] * 7, [0] * 7
+    for d, qty in daily:
+        if d < today:                    # today isn't finished yet
+            sums[d.weekday()] += qty
+            counts[d.weekday()] += 1
+    weekday_avg = [round(sums[i] / counts[i], 1) if counts[i] else 0.0 for i in range(7)]
+
+    report = PeriodReport(
+        start=start, end=end, calendar_end=calendar_end, is_month=is_month,
         total_dispensed=total_dispensed, total_received=total_received,
+        deliveries=db.delivery_count(conn, s, e),
         entry_count=db.dispensing_entry_count(conn, s, e),
         medicines_dispensed=len(dispensed),
         days_counted=days_counted,
-        avg_per_day=round(total_dispensed / days_counted, 1) if days_counted else 0.0,
+        avg_per_day=round(total_dispensed / days_counted, 1),
         medicines=rows, top_days=top_days,
         prescribers=[{"prescriber": r["prescriber"], "qty": int(r["qty"]),
                       "entries": int(r["entries"])}
                      for r in db.dispensed_by_prescriber(conn, s, e)],
+        daily=daily, hourly=db.dispensing_entries_by_hour(conn, s, e),
+        weekday_avg=weekday_avg, weekday_days=counts, stock_cover=cover,
     )
+
+    if is_month:
+        prev_end = start - timedelta(days=1)
+        prev_start = prev_end.replace(day=1)
+    else:
+        prev_end = start - timedelta(days=1)
+        prev_start = start - timedelta(days=days_counted)
+    first = db.first_transaction_date(conn)
+    if first is not None and to_date(first) <= prev_start:
+        report.prev_start, report.prev_end = prev_start, prev_end
+        report.prev_daily = daily_series(conn, prev_start, prev_end)
+        prev_total = sum(q for _, q in report.prev_daily)
+        report.prev_avg_per_day = round(prev_total / len(report.prev_daily), 1)
+    return report
+
+
+def monthly_report(conn, year: int, month: int, today: date | None = None) -> PeriodReport:
+    start, end = month_bounds(year, month)
+    return period_report(conn, start, end, today, is_month=True)
+
+
+MonthlyReport = PeriodReport     # the report used to be monthly only

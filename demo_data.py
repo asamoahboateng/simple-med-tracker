@@ -66,7 +66,7 @@ def seed_demo(conn, today: date | None = None) -> bool:
                 expiry = received_on + timedelta(days=5)
             logic.add_stock(conn, received_on, name, qty, f"{1000 + i * 10 + b:05d}", expiry,
                             unit=unit, reorder_level=reorder, today=today,
-                            now=stamp(received_on))
+                            now=stamp(received_on), entered_by="Demo data")
 
     # 2) Daily dispensing for the last ~70 days (more on weekdays).
     day = start + timedelta(days=30)
@@ -79,7 +79,8 @@ def seed_demo(conn, today: date | None = None) -> bool:
             prescriber = rng.choice(PRESCRIBERS) if rng.random() > 0.05 else ""
             try:
                 logic.dispense(conn, day, name, qty, patient_id=f"P{patient_no:05d}",
-                               prescriber=prescriber, today=today, now=stamp(day))
+                               prescriber=prescriber, today=today, now=stamp(day),
+                               entered_by="Demo data")
                 patient_no += 1
             except logic.InsufficientStockError:
                 pass  # ran out - that's fine, it makes the LOW / OUT alerts interesting

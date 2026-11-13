@@ -97,3 +97,89 @@ def test_create_medicine_without_stock(conn, add):
         logic.create_medicine(conn, "zinc 20MG", "tablets", 5)
     # Adding stock later uses the existing medicine.
     assert add(name="ZINC 20mg", qty=50).created_medicine is False
+
+
+def test_rename_medicine_keeps_history(conn, add, give):
+    add(name="Paracetmol", qty=50)
+    give(name="Paracetmol", qty=5)
+    med = db.find_medicine(conn, "Paracetmol")
+    logic.rename_medicine(conn, med["id"], "  Paracetamol 500mg ")
+    assert db.get_medicine(conn, med["id"])["name"] == "Paracetamol 500mg"
+    assert db.medicine_stock(conn, med["id"]) == 45
+    assert {r["medicine"] for r in logic.log_rows(conn)} == {"Paracetamol 500mg"}
+
+
+def test_rename_medicine_allows_case_change_but_not_duplicates(conn, add):
+    add(name="Ibuprofen")
+    add(name="Amoxicillin")
+    med = db.find_medicine(conn, "Ibuprofen")
+    logic.rename_medicine(conn, med["id"], "IBUPROFEN")
+    assert db.get_medicine(conn, med["id"])["name"] == "IBUPROFEN"
+    with pytest.raises(logic.ValidationError, match="already exists"):
+        logic.rename_medicine(conn, med["id"], "amoxicillin")
+    with pytest.raises(logic.ValidationError):
+        logic.rename_medicine(conn, med["id"], "   ")
+
+
+def test_update_batch_number_and_expiry(conn, add, give):
+    add(qty=30, batch="OPENING", expiry="2099-12-31")
+    give(qty=10)
+    med = db.find_medicine(conn, "Paracetamol")
+    batch = db.find_batch(conn, med["id"], "OPENING")
+    logic.update_batch(conn, batch["id"], batch_no="BX-77", expiry_date="2027-03-31")
+    row = logic.batch_rows(conn, TODAY)[0]
+    assert (row["batch_no"], row["expiry"], row["remaining"]) == ("BX-77", "2027-03-31", 20)
+
+
+def test_update_batch_rejects_duplicate_number_and_bad_date(conn, add):
+    add(batch="B001")
+    add(batch="B002", expiry="2027-06-30")
+    med = db.find_medicine(conn, "Paracetamol")
+    b2 = db.find_batch(conn, med["id"], "B002")
+    with pytest.raises(logic.ValidationError, match="already exists"):
+        logic.update_batch(conn, b2["id"], batch_no="b001")
+    with pytest.raises(logic.ValidationError):
+        logic.update_batch(conn, b2["id"], expiry_date="31/06/2027")
+    with pytest.raises(logic.ValidationError):
+        logic.update_batch(conn, b2["id"], batch_no="")
+    logic.update_batch(conn, b2["id"], batch_no="b002")  # case change of itself is fine
+    assert db.get_batch(conn, b2["id"])["batch_no"] == "b002"
+
+
+def test_unit_list_starts_with_common_units_and_grows(conn, add):
+    from config import COMMON_UNITS
+    assert set(COMMON_UNITS) <= set(logic.unit_names(conn))
+    assert logic.add_unit(conn, "  strips ") == "strips"
+    with pytest.raises(logic.ValidationError, match="already in the list"):
+        logic.add_unit(conn, "STRIPS")
+    with pytest.raises(logic.ValidationError):
+        logic.add_unit(conn, "   ")
+    # Typing a new unit when creating a medicine adds it to the list too.
+    logic.create_medicine(conn, "Gauze roll", "rolls", 5)
+    add(name="Test kit", unit="kits")
+    assert {"strips", "rolls", "kits"} <= set(logic.unit_names(conn))
+
+
+def test_a_unit_in_use_cannot_be_removed(conn, add):
+    add(name="Paracetamol", unit="tablets")
+    with pytest.raises(logic.ValidationError, match="1 medicine uses it"):
+        logic.remove_unit(conn, "TABLETS")                   # ignoring case
+    assert "tablets" in logic.unit_names(conn)
+    logic.remove_unit(conn, "vials")                         # unused: removed
+    assert "vials" not in logic.unit_names(conn)
+    med = db.find_medicine(conn, "Paracetamol")
+    logic.update_medicine_settings(conn, med["id"], unit="strips")
+    logic.remove_unit(conn, "tablets")                       # no longer used
+    assert "tablets" not in logic.unit_names(conn)
+
+
+def test_existing_database_gets_its_units_listed(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA.split("CREATE TABLE IF NOT EXISTS units")[0])
+    old.execute("INSERT INTO medicines (name, unit) VALUES ('Swabs', 'boxes of 100')")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert "boxes of 100" in logic.unit_names(conn)

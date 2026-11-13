@@ -4,12 +4,14 @@ A desktop app for tracking medicine stock and dispensing in a small pharmacy or 
 It runs on Windows, macOS and Linux, works fully offline, and keeps its data in one
 local SQLite database file.
 
-- **Dashboard**: summary cards, charts and alerts for low stock and expiring batches
+- **Dashboard**: summary figures; what needs attention (out of stock, expiring, expired); an expiry shelf showing every batch by the month it expires; running low, stock health and this month's dispensing
 - **Add Stock** / **Record Dispensed**: data-entry dialogs. Dispensing takes stock from the batch that expires first (FEFO) automatically.
 - **Dispensing Log**: every entry, with filters, undo, and Excel/CSV export
 - **Stock & Batches**: current stock per medicine and per batch, colour-coded
-- **Monthly Report**: totals, rankings, busiest days and prescribers, with Excel and PDF export
-- **File menu**: back up and restore the database, open the data folder
+- **Reports**: a month or any date range (quick picks for the last 7, 30 or 90 days), compared with the period before; a day-by-day calendar, top 10 medicines, pace, busiest weekdays and hours, prescriber share, days of stock left and a ranked table, with Excel and PDF export
+- **File menu**: back up and restore the database, open the data folder, change password, sign out
+- **Sign-in and users**: people register and wait for approval; administrators approve or
+  revoke access, and every entry records who made it
 
 ---
 
@@ -23,7 +25,7 @@ local SQLite database file.
 | `logic.py` | Business rules: validation, FEFO allocation, undo, dashboard and report calculations. It has no UI code, so it can be tested. |
 | `exports.py` | Excel/CSV export and the HTML used for the PDF report. |
 | `demo_data.py` | Sample data for the separate demo database. |
-| `ui/` | One module per page (`dashboard.py`, `add_stock.py`, `dispense.py`, `log.py`, `stock.py`, `report.py`), plus `main_window.py` (sidebar and menus), `medicine.py` (New Medicine dialog), `theme.py` (colours and the app-wide stylesheet), `responsive.py` (grids and layouts that adapt to the window size), the shared table model with status badges (`models.py`), the chart widgets (`charts.py`) and shared cards/buttons (`widgets.py`). |
+| `ui/` | One module per page (`dashboard.py`, `add_stock.py`, `dispense.py`, `log.py`, `stock.py`, `report.py`), plus `main_window.py` (sidebar and menus), `medicine.py` (New Medicine dialog), `theme.py` (colours and the app-wide stylesheet), `responsive.py` (grids and layouts that adapt to the window size), the shared table model with status badges (`models.py`), the dashboard's panels and drawn charts (`dashboard_widgets.py`), line icons (`icons.py`), the report chart widgets (`charts.py`) and shared cards/buttons (`widgets.py`). The app font, Atkinson Hyperlegible Next, is bundled in `resources/fonts` under the SIL Open Font License (`OFL.txt`). |
 | `resources/` | App icons (`.ico` Windows, `.icns` macOS, `.png` Linux/window) and small SVG arrows used by the theme. |
 | `tests/` | pytest tests. |
 | `medtracker.spec` | PyInstaller build recipe. |
@@ -31,7 +33,7 @@ local SQLite database file.
 | `build.bat` / `build.sh` | One-step build: run the tests, build the app and package it (`.exe` on Windows; `.app`, `.dmg` and `.zip` on macOS). |
 | `build-linux.sh` / `build-all.sh` | From a Mac: build the Linux version with Docker / build everything this Mac can build. |
 | `run.bat` / `run.sh` | Start the app with the `.venv` Python. No activation needed. |
-| `.github/workflows/build.yml` | Builds all three versions on GitHub when you push a version tag. |
+| `.github/workflows/build.yml` | Builds on GitHub when you push a version tag (Windows; add macOS/Linux via the tag message). |
 
 **Stock is never stored as a number you can edit.** MedTracker works it out every time
 from the log: *stock received − stock dispensed*. It does the same for each batch.
@@ -235,21 +237,27 @@ repositories, and private repositories get free monthly build minutes.
    git commit -m "Version 1.0.1"
    git push
    ```
-2. Tag the version and push the tag. **This starts the builds:**
+2. Tag the version and push the tag. **This starts the builds.** Only Windows is built by
+   default. To also build macOS and/or Linux, say so in the tag message:
    ```
-   git tag v1.0.1
+   git tag v1.0.1                                  # Windows only
+   git tag -a v1.0.1 -m "include mac"              # Windows + macOS
+   git tag -a v1.0.1 -m "include mac linux"        # Windows + macOS + Linux ("include all" also works)
    git push origin v1.0.1
    ```
+   The same words in the tagged commit's message work too.
 3. Open your repository on GitHub and click the **Actions** tab to watch the progress. It takes about 10–15 minutes.
    Each machine runs the tests first, then builds.
-4. When it finishes, go to **Releases** (on the right of the repository's main page). Download:
+4. When it finishes, go to **Releases** (on the right of the repository's main page). Download
+   (only the platforms you built are there):
    - `MedTracker-Windows.exe` for Windows 10/11
    - `MedTracker-macOS-AppleSilicon.dmg` / `.zip` for Macs with an M1 or newer chip
    - `MedTracker-macOS-Intel.dmg` / `.zip` for Intel Macs
    - `MedTracker-Linux-x86_64.zip` for Linux
 
-You can also start the workflow by hand from the Actions tab (**Run workflow**). A manual run
-attaches the builds to the workflow run instead of creating a release.
+You can also start the workflow by hand from the Actions tab (**Run workflow**), with
+checkboxes to also build macOS and Linux. A manual run attaches the builds to the workflow run
+instead of creating a release.
 
 When you release a new version, update `APP_VERSION` in `config.py`, then push a new tag such as `v1.0.1`.
 
@@ -257,9 +265,44 @@ When you release a new version, update `APP_VERSION` in `config.py`, then push a
 
 ## 3. Using MedTracker
 
+### Signing in and user accounts
+
+- **Signing in**: MedTracker opens on a sign-in window. New staff click **Create an account**
+  (full name, username, password of at least 8 characters, and optionally a 6-digit sign-in
+  code). They can sign in once an administrator approves the account, with either their
+  password or their code. **File → Set sign-in code** sets, changes or removes the code later.
+- **Superadmin**: click **Use the superadmin code** on the sign-in window and enter the
+  6-digit code.
+  The superadmin can approve, revoke and restore anyone, make a user a **user admin** (or back
+  to a regular user), and set a new password for anyone who has forgotten theirs. The code is
+  stored only as a salted hash, so it can't be read from the source code or the program; keep
+  it somewhere safe.
+- **User admins** can approve, revoke, restore and reset passwords for regular users, but not
+  for other administrators. Only administrators see the **Users** page and **File → Restore
+  from backup** (a restore also replaces the user accounts).
+- **Users page**: new accounts show as *Awaiting approval*, and the sidebar shows how many are
+  waiting, e.g. **Users (2)**. Select an account and use **Approve**, **Revoke access** or
+  **Set new password**. **Remove sign-in code** clears a user's 6-digit code if someone else may
+  know it; they can still sign in with their password. Revoking takes effect at once: a revoked user who is still signed in
+  is signed out the next time they do anything.
+- **Entered by**: every stock or dispensing entry records who made it, shown in the
+  Dispensing Log and its exports. Entries made before sign-in existed show *Before sign-in*.
+- Passwords and codes are stored as salted PBKDF2 hashes. A 6-digit code has only a million
+  possibilities: in the app, five wrong attempts in a row pause sign-in for 30 seconds, but
+  someone who copies the program or the database could try every code. Use a password for
+  anything sensitive and keep the program and data folder on trusted computers. Sign-in protects the app, not the data file
+  itself: anyone who can open the data folder can copy the database, so keep the computer's own
+  user account protected too.
+
+### Everyday tasks
+
 - **New medicine**: use the **➕ New medicine** button on the Stock & Batches page, or
   **Entries → New Medicine** (Ctrl+M). Enter the name, unit and reorder level. The medicine
   starts with no stock, so it shows as OUT OF STOCK until you add stock.
+- **Units**: **Entries → Units…**, the **Units** button on Stock & Batches, or **Manage units**
+  next to any Unit drop-down. Add units such as strips, rolls or "boxes of 100" and they appear
+  in every Unit drop-down. A unit typed straight into a drop-down is added to the list too.
+  A unit that any medicine uses can't be removed; the list shows how many medicines use each.
 - **Add Stock**: pick a medicine or type a new name. For a new medicine, you'll also be asked
   for its unit and reorder level. The batch number and expiry date are required. If the
   batch already exists, its original expiry date is kept. Stock that is already expired
@@ -269,8 +312,11 @@ When you release a new version, update `APP_VERSION` in `config.py`, then push a
   Expired batches and quantities larger than the available stock are blocked. After saving,
   the app shows which batches were used and warns you if stock is now **LOW**.
 - **Dispensing Log → Undo last entry**: shows the most recent entry and deletes it after you confirm.
-- **Stock & Batches**: double-click **Unit** or **Reorder level** to change them.
+- **Stock & Batches**: double-click a medicine's **name**, **Unit** or **Reorder level**, or a batch's **Batch No** or **Expiry**, to change them.
   Other values are calculated and can't be edited.
+- **Colours**: **View → Colour theme** switches between Bottle green, Navy, Ocean blue, Teal,
+  Plum and Charcoal. The change applies at once and is remembered on that computer. Red, amber
+  and green keep their meaning (expired, expiring, OK) in every theme.
 - **Backups**: **File → Backup database** saves a copy with the date in its file name.
   **File → Restore from backup** replaces the current data, but first saves a safety copy of
   your current data in the `backups` folder.

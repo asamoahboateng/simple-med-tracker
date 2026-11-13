@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QStyle, QStyledItemDelegate, QTableView,
 )
 
+import auth
 import logic
 
 SORT_ROLE = Qt.UserRole + 1
@@ -35,6 +36,9 @@ STATUS_COLOURS = {
     logic.BATCH_USED_UP: GREY,
     logic.STOCK_IN: GREEN,
     logic.DISPENSED: BLUE,
+    auth.STATUS_NAMES[auth.PENDING]: AMBER,
+    auth.STATUS_NAMES[auth.ACTIVE]: GREEN,
+    auth.STATUS_NAMES[auth.REVOKED]: RED,
 }
 
 @dataclass

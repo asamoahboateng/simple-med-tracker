@@ -11,6 +11,9 @@ Design notes
 * Rows saved together (for example one dispensing split across two batches)
   share the same `entry_group`, so "Undo last entry" removes them together.
 * Dates are stored as ISO text: 'YYYY-MM-DD'. Timestamps as 'YYYY-MM-DD HH:MM:SS'.
+* Each transaction records who entered it (`entered_by`, the user's display name).
+  Rows saved before sign-in existed carry PRE_LOGIN_ENTERED_BY.
+* User passwords are stored only as salted hashes (see auth.py).
 * The connection runs in autocommit mode; multi-row saves are wrapped in
   `with transaction(conn):` so a failure never leaves partial data.
 """
@@ -19,7 +22,10 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+from config import COMMON_UNITS
+
+SCHEMA_VERSION = 4
+PRE_LOGIN_ENTERED_BY = "Before sign-in"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS medicines (
@@ -50,7 +56,27 @@ CREATE TABLE IF NOT EXISTS transactions (
     prescriber    TEXT    NOT NULL DEFAULT '',
     balance_after INTEGER NOT NULL,
     entry_group   TEXT    NOT NULL,
-    entered_at    TEXT    NOT NULL
+    entered_at    TEXT    NOT NULL,
+    entered_by    TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS units (                 -- the choices in every Unit drop-down
+    name       TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT    NOT NULL COLLATE NOCASE UNIQUE,
+    full_name     TEXT    NOT NULL,
+    password_hash TEXT    NOT NULL,
+    pin_hash      TEXT    NOT NULL DEFAULT '',   -- optional 6-digit sign-in code
+    role          TEXT    NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'useradmin')),
+    status        TEXT    NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending', 'active', 'revoked')),
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    decided_by    TEXT    NOT NULL DEFAULT '',   -- who last approved / revoked
+    decided_at    TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tx_medicine ON transactions(medicine_id);
@@ -82,8 +108,25 @@ def connect(path) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Create all tables if they do not exist yet (safe to call every start)."""
+    """Create missing tables and upgrade older databases (safe to call every start)."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(transactions)")}
+    if columns and "entered_by" not in columns:
+        # Version 1 had no sign-in: add the column and label the existing rows.
+        conn.execute("ALTER TABLE transactions ADD COLUMN entered_by TEXT NOT NULL DEFAULT ''")
+        conn.execute("UPDATE transactions SET entered_by = ?", (PRE_LOGIN_ENTERED_BY,))
+    user_columns = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+    if user_columns and "pin_hash" not in user_columns:
+        # Version 2 had passwords only: add the optional 6-digit sign-in code.
+        conn.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT NOT NULL DEFAULT ''")
+    had_units = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'units'").fetchone()
     conn.executescript(SCHEMA)
+    if not had_units:
+        # First time: start the list with the common units and every unit already in use.
+        for name in COMMON_UNITS:
+            add_unit(conn, name)
+        for row in conn.execute("SELECT DISTINCT unit FROM medicines"):
+            add_unit(conn, row["unit"])
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -130,6 +173,25 @@ def create_medicine(conn, name: str, unit: str, reorder_level: int) -> int:
     return cur.lastrowid
 
 
+def list_units(conn) -> list[str]:
+    return [r["name"] for r in conn.execute("SELECT name FROM units ORDER BY name COLLATE NOCASE")]
+
+
+def add_unit(conn, name: str) -> None:
+    """Add a unit to the list (nothing happens if it is already there, ignoring case)."""
+    if name and name.strip():
+        conn.execute("INSERT OR IGNORE INTO units (name) VALUES (?)", (name.strip(),))
+
+
+def remove_unit(conn, name: str) -> None:
+    conn.execute("DELETE FROM units WHERE name = ?", (name.strip(),))
+
+
+def medicines_using_unit(conn, name: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM medicines WHERE unit = ? COLLATE NOCASE",
+                        (name.strip(),)).fetchone()[0]
+
+
 def list_medicines(conn):
     return conn.execute("SELECT * FROM medicines ORDER BY name COLLATE NOCASE").fetchall()
 
@@ -139,8 +201,9 @@ def medicine_names(conn) -> list[str]:
 
 
 def update_medicine(conn, medicine_id: int, unit: str | None = None,
-                    reorder_level: int | None = None) -> None:
-    """Only the unit and reorder level may be edited."""
+                    reorder_level: int | None = None, name: str | None = None) -> None:
+    if name is not None:
+        conn.execute("UPDATE medicines SET name = ? WHERE id = ?", (name.strip(), medicine_id))
     if unit is not None:
         conn.execute("UPDATE medicines SET unit = ? WHERE id = ?", (unit.strip(), medicine_id))
     if reorder_level is not None:
@@ -174,6 +237,18 @@ def create_batch(conn, medicine_id: int, batch_no: str, expiry_date: str) -> int
         (medicine_id, batch_no.strip(), expiry_date),
     )
     return cur.lastrowid
+
+
+def get_batch(conn, batch_id: int):
+    return conn.execute("SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
+
+
+def update_batch(conn, batch_id: int, batch_no: str | None = None,
+                 expiry_date: str | None = None) -> None:
+    if batch_no is not None:
+        conn.execute("UPDATE batches SET batch_no = ? WHERE id = ?", (batch_no.strip(), batch_id))
+    if expiry_date is not None:
+        conn.execute("UPDATE batches SET expiry_date = ? WHERE id = ?", (expiry_date, batch_id))
 
 
 def batch_stock(conn, batch_id: int) -> int:
@@ -210,16 +285,16 @@ def batch_numbers(conn, medicine_id: int) -> list[str]:
 
 def insert_transaction(conn, *, tx_date: str, medicine_id: int, batch_id: int, tx_type: str,
                        quantity: int, balance_after: int, entry_group: str, entered_at: str,
-                       patient_id: str = "", prescriber: str = "") -> int:
+                       patient_id: str = "", prescriber: str = "", entered_by: str = "") -> int:
     cur = conn.execute(
         """
         INSERT INTO transactions
             (date, medicine_id, batch_id, type, quantity, patient_id, prescriber,
-             balance_after, entry_group, entered_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             balance_after, entry_group, entered_at, entered_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (tx_date, medicine_id, batch_id, tx_type, int(quantity), patient_id.strip(),
-         prescriber.strip(), int(balance_after), entry_group, entered_at),
+         prescriber.strip(), int(balance_after), entry_group, entered_at, entered_by.strip()),
     )
     return cur.lastrowid
 
@@ -227,7 +302,8 @@ def insert_transaction(conn, *, tx_date: str, medicine_id: int, batch_id: int, t
 LOG_SELECT = """
     SELECT t.id, t.date, m.name AS medicine, m.unit, t.type, t.quantity,
            b.batch_no, b.expiry_date AS expiry, t.patient_id, t.prescriber,
-           t.balance_after, t.entered_at, t.entry_group, t.medicine_id, t.batch_id
+           t.balance_after, t.entered_at, t.entered_by, t.entry_group, t.medicine_id,
+           t.batch_id
     FROM transactions t
     JOIN medicines m ON m.id = t.medicine_id
     JOIN batches   b ON b.id = t.batch_id
@@ -360,6 +436,35 @@ def dispensing_entry_count(conn, start: str, end: str) -> int:
     return int(row[0])
 
 
+def delivery_count(conn, start: str, end: str) -> int:
+    """Number of stock-in entries (deliveries) between two dates."""
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT entry_group) FROM transactions "
+        "WHERE type = 'STOCK_IN' AND date BETWEEN ? AND ?",
+        (start, end),
+    ).fetchone()
+    return int(row[0])
+
+
+def dispensing_entries_by_hour(conn, start: str, end: str) -> dict[int, int]:
+    """Dispensing entries per hour of the day they were recorded (from entered_at)."""
+    rows = conn.execute(
+        """
+        SELECT CAST(substr(entered_at, 12, 2) AS INTEGER) AS hour,
+               COUNT(DISTINCT entry_group) AS entries
+        FROM transactions
+        WHERE type = 'DISPENSED' AND date BETWEEN ? AND ?
+        GROUP BY hour
+        """,
+        (start, end),
+    ).fetchall()
+    return {int(r["hour"]): int(r["entries"]) for r in rows}
+
+
+def first_transaction_date(conn) -> str | None:
+    return conn.execute("SELECT MIN(date) FROM transactions").fetchone()[0]
+
+
 def dispensed_by_prescriber(conn, start: str, end: str):
     return conn.execute(
         """
@@ -372,6 +477,56 @@ def dispensed_by_prescriber(conn, start: str, end: str):
         """,
         (start, end),
     ).fetchall()
+
+
+# --------------------------------------------------------------------------
+# Users
+# --------------------------------------------------------------------------
+
+def find_user(conn, username: str):
+    return conn.execute("SELECT * FROM users WHERE username = ?",
+                        (username.strip(),)).fetchone()
+
+
+def get_user(conn, user_id: int):
+    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def create_user(conn, username: str, full_name: str, password_hash: str,
+                pin_hash: str = "") -> int:
+    cur = conn.execute(
+        "INSERT INTO users (username, full_name, password_hash, pin_hash) VALUES (?, ?, ?, ?)",
+        (username.strip(), full_name.strip(), password_hash, pin_hash))
+    return cur.lastrowid
+
+
+def list_users(conn):
+    return conn.execute(
+        """SELECT * FROM users
+           ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
+                    full_name COLLATE NOCASE""").fetchall()
+
+
+def pending_user_count(conn) -> int:
+    return conn.execute("SELECT COUNT(*) FROM users WHERE status = 'pending'").fetchone()[0]
+
+
+def set_user_status(conn, user_id: int, status: str, decided_by: str, decided_at: str) -> None:
+    conn.execute("UPDATE users SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?",
+                 (status, decided_by, decided_at, user_id))
+
+
+def set_user_role(conn, user_id: int, role: str) -> None:
+    conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+
+
+def set_user_password(conn, user_id: int, password_hash: str) -> None:
+    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+
+
+def set_user_pin(conn, user_id: int, pin_hash: str) -> None:
+    """Set (or with "" remove) a user's 6-digit sign-in code."""
+    conn.execute("UPDATE users SET pin_hash = ? WHERE id = ?", (pin_hash, user_id))
 
 
 # --------------------------------------------------------------------------

@@ -14,13 +14,15 @@ class FlowGrid(QWidget):
     """
     Shows `widgets` in a grid whose column count depends on the available width:
     as many columns as fit with at least `min_item_width` pixels each, but never
-    more than `max_columns`. Every column gets the same width.
+    more than `max_columns`. Every column gets the same width, unless `stretches`
+    gives relative widths for the full `max_columns` layout (e.g. (8, 5)).
     """
 
     def __init__(self, widgets, min_item_width: int = 220, max_columns: int | None = None,
-                 spacing: int = 16, parent=None):
+                 spacing: int = 16, parent=None, stretches: tuple[int, ...] | None = None):
         super().__init__(parent)
         self.items = list(widgets)
+        self.stretches = stretches
         self.min_item_width = min_item_width
         self.max_columns = max_columns or len(self.items)
         self.spacing = spacing
@@ -51,8 +53,9 @@ class FlowGrid(QWidget):
             self.grid.setColumnStretch(c, 0)
         for i, widget in enumerate(self.items):
             self.grid.addWidget(widget, i // columns, i % columns)
+        use_stretches = self.stretches is not None and columns == len(self.stretches)
         for c in range(columns):
-            self.grid.setColumnStretch(c, 1)
+            self.grid.setColumnStretch(c, self.stretches[c] if use_stretches else 1)
         self.columns = columns
 
     def resizeEvent(self, event):

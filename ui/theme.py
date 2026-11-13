@@ -6,28 +6,91 @@ Widgets opt into styles with setObjectName(...) or a "kind" property, e.g.
 so page code stays free of colour details.
 """
 
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtCore import QSettings
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
 from config import resource_path
 
 # --- palette -------------------------------------------------------------
-BG = "#f3f5fa"            # window background
+# The brand colours (sidebar, buttons, text, background) come from the chosen preset,
+# see PRESETS below. Status colours never change, so red, amber and green always mean
+# expired / out of stock, expiring soon / low, and OK.
 SURFACE = "#ffffff"       # cards, tables, inputs
-BORDER = "#e3e8f0"
-BORDER_STRONG = "#d3dae6"
-TEXT = "#14213d"
-TEXT_MUTED = "#6b7a90"
-NAVY = "#0f2139"          # sidebar
-NAVY_HOVER = "#1a3354"
-PRIMARY = "#1f8a78"       # teal - main action colour
-PRIMARY_HOVER = "#18705f"
 BLUE = "#3867d6"
 BLUE_HOVER = "#2c55b8"
-AMBER = "#e09f1f"
-RED = "#d64545"
+AMBER = "#b86e00"         # expiring soon / low (fills)
+AMBER_TEXT = "#8a5200"    # amber that is readable as text on white
+AMBER_TINT = "#f7ebd6"
+RED = "#b83227"           # expired / out of stock
+RED_TINT = "#f8e3e0"
 PURPLE = "#7c5cd6"
-GREEN = "#2f9e5b"
+GREEN = "#3e7a5a"         # OK
+
+# Each preset: sidebar, its hover / border / text shades, main text and background.
+# Every pair used together has at least 4.5:1 contrast.
+PRESETS = {
+    "Bottle green": dict(
+        NAVY="#14332c", NAVY_HOVER="#1e463d", SIDEBAR_TEXT="#c9d8d3", SIDEBAR_MUTED="#a9bdb6",
+        SIDEBAR_BORDER="#3a5e55", SIDEBAR_ACTIVE="#285a4e", TEXT="#14332c", TEXT_MUTED="#4e635d",
+        BG="#eef2f1", BORDER="#dde5e2", BORDER_STRONG="#c9d4d0", RULE="#e4eae8", SHELF="#d5dedb",
+        BADGE_BG="#e2ebe8"),
+    "Navy": dict(
+        NAVY="#0f2139", NAVY_HOVER="#1a3354", SIDEBAR_TEXT="#c6d2e3", SIDEBAR_MUTED="#8ea3bf",
+        SIDEBAR_BORDER="#2b4a73", SIDEBAR_ACTIVE="#22406a", TEXT="#14213d", TEXT_MUTED="#4f5d75",
+        BG="#f1f4f9", BORDER="#dfe5ee", BORDER_STRONG="#cbd4e1", RULE="#e5eaf1", SHELF="#d4dce8",
+        BADGE_BG="#e1e8f3"),
+    "Ocean blue": dict(
+        NAVY="#173b6c", NAVY_HOVER="#22508e", SIDEBAR_TEXT="#d3e0f2", SIDEBAR_MUTED="#a7bddd",
+        SIDEBAR_BORDER="#3a65a0", SIDEBAR_ACTIVE="#2b5c9e", TEXT="#142c4f", TEXT_MUTED="#4a5d78",
+        BG="#eff3f9", BORDER="#dce4ef", BORDER_STRONG="#c7d3e3", RULE="#e3e9f2", SHELF="#d1dbe9",
+        BADGE_BG="#dfe8f5"),
+    "Teal": dict(
+        NAVY="#0f3d44", NAVY_HOVER="#17525b", SIDEBAR_TEXT="#cde2e4", SIDEBAR_MUTED="#9cc0c4",
+        SIDEBAR_BORDER="#2f6b73", SIDEBAR_ACTIVE="#1f6670", TEXT="#11353b", TEXT_MUTED="#4a6367",
+        BG="#edf3f4", BORDER="#dbe6e8", BORDER_STRONG="#c5d6d9", RULE="#e2ebec", SHELF="#d0dfe1",
+        BADGE_BG="#dcebed"),
+    "Plum": dict(
+        NAVY="#3b1f3f", NAVY_HOVER="#4f2c54", SIDEBAR_TEXT="#e2d3e4", SIDEBAR_MUTED="#bfa6c2",
+        SIDEBAR_BORDER="#6b4870", SIDEBAR_ACTIVE="#5f3964", TEXT="#2e1a31", TEXT_MUTED="#5f4e63",
+        BG="#f4f0f4", BORDER="#e6dee7", BORDER_STRONG="#d5c8d7", RULE="#ebe4ec", SHELF="#ddd2df",
+        BADGE_BG="#ece2ed"),
+    "Charcoal": dict(
+        NAVY="#23272e", NAVY_HOVER="#333943", SIDEBAR_TEXT="#d3d7de", SIDEBAR_MUTED="#a4aab4",
+        SIDEBAR_BORDER="#4a515d", SIDEBAR_ACTIVE="#3f4651", TEXT="#1f2329", TEXT_MUTED="#545b66",
+        BG="#f1f2f4", BORDER="#e0e2e6", BORDER_STRONG="#cdd1d7", RULE="#e6e8eb", SHELF="#d6d9de",
+        BADGE_BG="#e4e6ea"),
+}
+DEFAULT_PRESET = "Bottle green"
+current_preset = DEFAULT_PRESET
+
+
+def set_preset(name: str) -> None:
+    """Switch the brand colours. Widgets created afterwards use the new colours."""
+    global current_preset
+    if name not in PRESETS:
+        name = DEFAULT_PRESET
+    current_preset = name
+    globals().update(PRESETS[name])
+    globals().update(PRIMARY=NAVY, PRIMARY_HOVER=NAVY_HOVER)
+
+
+set_preset(DEFAULT_PRESET)
+
+
+def _settings() -> QSettings:
+    return QSettings("MedTracker", "MedTracker")
+
+
+def saved_preset() -> str:
+    return str(_settings().value("appearance/theme", DEFAULT_PRESET))
+
+
+def save_preset(name: str) -> None:
+    _settings().setValue("appearance/theme", name)
+
+
+FONT_FAMILY = "Atkinson Hyperlegible Next"   # bundled in resources/fonts (OFL licence)
 
 
 def tint(hex_colour: str, alpha: float) -> str:
@@ -50,21 +113,20 @@ def _stylesheet() -> str:
     QWidget#sidebar {{ background: {NAVY}; }}
     QWidget#sidebar QLabel {{ background: transparent; }}
     QLabel#brandTitle {{ color: white; font-size: 19px; font-weight: 700; }}
-    QLabel#brandSub {{ color: #8ea3bf; font-size: 11px; }}
-    QLabel#navCaption {{ color: #6f85a3; font-size: 10px; font-weight: 700;
-                         letter-spacing: 1px; padding-left: 18px; }}
+    QLabel#brandSub {{ color: {SIDEBAR_MUTED}; font-size: 12px; }}
+    QLabel#navCaption {{ color: {SIDEBAR_MUTED}; font-size: 12px; font-weight: 700; padding-left: 20px; }}
     QListWidget#nav {{ background: transparent; border: none; outline: 0;
-                       color: #c6d2e3; font-size: 14px; }}
-    QListWidget#nav::item {{ padding: 10px 12px; margin: 2px 10px; border-radius: 8px; }}
+                       color: {SIDEBAR_TEXT}; font-size: 14px; }}
+    QListWidget#nav::item {{ padding: 10px 12px; margin: 2px 12px; border-radius: 8px; }}
     QListWidget#nav::item:hover {{ background: {NAVY_HOVER}; color: white; }}
-    QListWidget#nav::item:selected {{ background: {PRIMARY}; color: white; font-weight: 600; }}
-    QPushButton#sideAction {{ background: {NAVY_HOVER}; color: white; border: 1px solid #28476f;
-                              border-radius: 8px; padding: 9px 12px; text-align: left;
-                              font-weight: 600; margin: 0 10px; }}
-    QPushButton#sideAction:hover {{ background: #22406a; border-color: #3a5d8c; }}
+    QListWidget#nav::item:selected {{ background: white; color: {TEXT}; font-weight: 700; }}
+    QPushButton#sideAction {{ background: {NAVY_HOVER}; color: white; border: 1px solid {SIDEBAR_BORDER};
+                              border-radius: 8px; padding: 10px 12px; text-align: left;
+                              font-weight: 700; margin: 0 12px; }}
+    QPushButton#sideAction:hover {{ background: {SIDEBAR_ACTIVE}; border-color: {SIDEBAR_MUTED}; }}
     QLabel#demoBadge {{ background: {tint(AMBER, 0.18)}; color: #f3c56b; border-radius: 6px;
                         padding: 6px 8px; font-size: 11px; font-weight: 700; margin: 0 10px; }}
-    QLabel#versionLabel {{ color: #5d7392; font-size: 11px; padding-left: 18px; }}
+    QLabel#versionLabel {{ color: {SIDEBAR_MUTED}; font-size: 12px; padding-left: 20px; }}
 
     /* ---------- headings ---------- */
     QLabel#pageTitle {{ font-size: 26px; font-weight: 700; color: {TEXT}; }}
@@ -81,6 +143,43 @@ def _stylesheet() -> str:
     QLabel#cardValue {{ color: {TEXT}; font-size: 30px; font-weight: 700; }}
     QLabel#cardNote {{ color: {TEXT_MUTED}; font-size: 11px; }}
 
+    /* ---------- dashboard ---------- */
+    QFrame#panel {{ background: {SURFACE}; border: none; border-radius: 12px; }}
+    QFrame#panel QLabel, QWidget#panelCell QLabel {{ background: transparent; }}
+    QLabel#dashTitle {{ font-size: 30px; font-weight: 800; color: {TEXT}; }}
+    QLabel#sectionHeading {{ font-size: 21px; font-weight: 800; color: {TEXT}; }}
+    QLabel#panelHeading {{ font-size: 19px; font-weight: 800; color: {TEXT}; }}
+    QLabel#groupHeading {{ font-size: 17px; font-weight: 700; color: {TEXT}; }}
+    QLabel#muted {{ color: {TEXT_MUTED}; }}
+    QLabel#statLabel {{ color: {TEXT_MUTED}; font-size: 13px; font-weight: 700; }}
+    QLabel#statValue {{ color: {TEXT}; font-size: 30px; font-weight: 800; }}
+    QLabel#statNote {{ color: {TEXT_MUTED}; font-size: 12px; }}
+    QLabel#sampleTag {{ color: {TEXT_MUTED}; border: 1px dashed #9aaaa5; border-radius: 6px;
+                        padding: 1px 8px; font-size: 12px; }}
+    QPushButton[kind="link"] {{ background: transparent; border: none; padding: 6px 0;
+                                color: {TEXT}; font-weight: 700; text-decoration: underline;
+                                text-align: left; }}
+    QPushButton[kind="link"]:hover {{ color: {GREEN}; }}
+    QPushButton[kind="outline"] {{ background: transparent; border: 2px solid {TEXT}; color: {TEXT};
+                                   font-weight: 700; }}
+    QPushButton[kind="outline"]:hover {{ background: {tint(TEXT, 0.06)}; }}
+
+    /* ---------- report period controls ---------- */
+    QFrame#segmentBox {{ background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 8px; }}
+    QPushButton[kind="segment"] {{ background: transparent; border: none; border-radius: 6px;
+                                   padding: 8px 16px; font-weight: 700; color: {TEXT}; }}
+    QPushButton[kind="segment"]:checked {{ background: {NAVY}; color: white; }}
+    QPushButton[kind="chip"] {{ background: {SURFACE}; border: 2px solid {BORDER_STRONG};
+                                border-radius: 18px; padding: 7px 14px; font-weight: 700; }}
+    QPushButton[kind="chip"]:hover {{ border-color: {TEXT_MUTED}; }}
+    QPushButton[kind="chip"]:checked {{ background: {NAVY}; border-color: {NAVY}; color: white; }}
+    QPushButton[kind="stepper"] {{ background: transparent; border: none; padding: 6px 12px;
+                                   font-size: 18px; font-weight: 800; color: {TEXT}; }}
+    QPushButton[kind="stepper"]:hover {{ background: {BG}; }}
+    QPushButton[kind="stepper"]:disabled {{ color: {BORDER_STRONG}; }}
+    QLabel#errorText {{ color: {RED}; font-weight: 700; }}
+    QLabel#caption {{ color: {TEXT}; }}
+
     /* ---------- buttons ---------- */
     QPushButton {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {BORDER_STRONG};
                    border-radius: 8px; padding: 7px 16px; font-weight: 600; }}
@@ -93,6 +192,9 @@ def _stylesheet() -> str:
     QPushButton[kind="blue"]:hover {{ background: {BLUE_HOVER}; }}
     QPushButton[kind="danger"] {{ color: {RED}; border-color: {tint(RED, 0.35)}; }}
     QPushButton[kind="danger"]:hover {{ background: {tint(RED, 0.08)}; }}
+    QPushButton:disabled, QPushButton[kind="danger"]:disabled, QPushButton[kind="primary"]:disabled,
+    QPushButton[kind="outline"]:disabled
+        {{ background: {SURFACE}; color: #9aa5b5; border: 1px solid {BORDER}; }}
     QPushButton[size="large"] {{ padding: 11px 22px; font-size: 14px; border-radius: 10px; }}
 
     /* ---------- inputs ---------- */
@@ -160,8 +262,12 @@ def _stylesheet() -> str:
     """
 
 
-def apply_theme(app: QApplication) -> None:
-    """Apply the light MedTracker theme (same look on every OS, even in dark mode)."""
+def apply_theme(app: QApplication, preset: str | None = None) -> None:
+    """
+    Apply the light MedTracker theme (same look on every OS, even in dark mode), in the
+    given colour preset, or the one saved last time.
+    """
+    set_preset(preset or saved_preset())
     app.setStyle("Fusion")
     palette = QPalette()
     for role, colour in {
@@ -174,7 +280,15 @@ def apply_theme(app: QApplication) -> None:
         palette.setColor(role, QColor(colour))
     app.setPalette(palette)
     font = app.font()
+    if _load_font():
+        font.setFamily(FONT_FAMILY)
     font.setPointSizeF(max(font.pointSizeF(), 10.0))
     font.setHintingPreference(QFont.PreferNoHinting)
     app.setFont(font)
     app.setStyleSheet(_stylesheet())
+
+
+def _load_font() -> bool:
+    """Register the bundled Atkinson Hyperlegible Next. False if it can't be loaded."""
+    path = resource_path("resources/fonts/AtkinsonHyperlegibleNext.ttf")
+    return path.exists() and QFontDatabase.addApplicationFont(str(path)) != -1

@@ -17,9 +17,10 @@ AUTOMATIC = "Automatic (earliest expiry first)"
 
 
 class DispenseDialog(QDialog):
-    def __init__(self, conn, parent=None):
+    def __init__(self, conn, parent=None, entered_by: str = ""):
         super().__init__(parent)
         self.conn = conn
+        self.entered_by = entered_by
         self.setWindowTitle("Record Dispensed")
         self.setMinimumWidth(580)
 
@@ -112,7 +113,7 @@ class DispenseDialog(QDialog):
             result = logic.dispense(
                 self.conn, to_py_date(self.date_edit.date()), self.medicine_combo.text(),
                 self.qty_spin.value(), batch_no=self.batch_combo.currentData(),
-                patient_id=patient, prescriber=prescriber)
+                patient_id=patient, prescriber=prescriber, entered_by=self.entered_by)
         except logic.ValidationError as exc:
             show_error(self, str(exc), title="Cannot save")
             return
