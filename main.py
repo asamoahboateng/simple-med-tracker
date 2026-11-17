@@ -7,21 +7,14 @@ main.py - MedTracker entry point.
 
 import argparse
 import logging
-import os
 import sys
 from logging.handlers import RotatingFileHandler
 
-# Make matplotlib use Qt (PySide6) - must happen before matplotlib is imported anywhere.
-os.environ.setdefault("QT_API", "pyside6")
-import matplotlib  # noqa: E402
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-matplotlib.use("QtAgg")
-
-from PySide6.QtGui import QIcon  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-import config  # noqa: E402
-import db  # noqa: E402
+import config
+import db
 
 log = logging.getLogger("medtracker")
 

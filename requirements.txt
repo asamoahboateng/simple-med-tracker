@@ -5,16 +5,8 @@
 # contains everything MedTracker uses: QtCore, QtGui, QtWidgets)
 PySide6-Essentials==6.11.2
 
-# Charts
-matplotlib==3.10.8
-
-# Excel / CSV export
-pandas==2.3.3
+# Excel export (CSV uses Python's built-in csv module). Charts are drawn with Qt.
 openpyxl==3.1.5
-
-# numpy is needed by pandas and matplotlib. Python 3.10 needs an older release.
-numpy==2.2.6; python_version < "3.11"
-numpy==2.3.5; python_version >= "3.11"
 
 # Finds the correct per-user data folder on Windows / macOS / Linux
 platformdirs==4.12.1

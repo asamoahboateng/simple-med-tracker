@@ -30,12 +30,14 @@ else:
     ICON = "resources/icon.png"
 
 # Heavy modules MedTracker never uses - excluding them keeps the build smaller.
+# numpy and PIL are optional extras of openpyxl: it works without them. They are listed
+# so an older .venv that still has them installed doesn't pull them into the build.
 EXCLUDES = [
     "tkinter", "_tkinter", "IPython", "jupyter", "notebook", "ipykernel",
     "PyQt5", "PyQt6", "PySide2", "scipy", "pytest", "setuptools",
-    "matplotlib.backends.backend_tkagg", "matplotlib.backends.backend_webagg",
+    "matplotlib", "pandas", "numpy", "PIL", "pytz", "dateutil",
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
-    "PySide6.QtMultimedia", "PySide6.QtQuick", "PySide6.QtQml",
+    "PySide6.QtMultimedia", "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtNetwork",
 ]
 
 a = Analysis(
@@ -43,12 +45,16 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[("resources", "resources")],   # icons, found at runtime via resource_path()
-    hiddenimports=["matplotlib.backends.backend_qtagg"],
+    hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],
     excludes=EXCLUDES,
     noarchive=False,
 )
+# Qt's translations of its own dialogs (~7 MB) are never loaded: the app installs no
+# QTranslator, so its dialogs are always in English.
+a.datas = [d for d in a.datas if "Qt/translations" not in d[0].replace("\\", "/")]
+
 pyz = PYZ(a.pure)
 
 if IS_WINDOWS:

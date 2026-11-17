@@ -1,45 +1,55 @@
 """
 exports.py - Save tables and reports to Excel (.xlsx), CSV and printable HTML.
 
-pandas is imported only when an export actually happens, so the app starts faster.
+openpyxl is imported only when an Excel export actually happens, so the app starts faster.
 The PDF itself is produced by the report page (ui/report.py) from report_html().
 """
 
+import csv
 import html
 from pathlib import Path
 
 import logic
 
 
-def _dataframe(rows: list[dict], columns: list[tuple[str, str]]):
-    """Build a DataFrame with the given (key, header) columns, in that order."""
-    import pandas as pd
-    return pd.DataFrame([[row.get(key) for key, _ in columns] for row in rows],
-                        columns=[header for _, header in columns])
+def _table(rows: list[dict], columns: list[tuple[str, str]]) -> list[list]:
+    """Header row plus one list of values per row, in the given (key, header) column order."""
+    return [[header for _, header in columns]] + [[row.get(key) for key, _ in columns]
+                                                  for row in rows]
 
 
-def _autofit(worksheet, df) -> None:
-    """Make Excel column widths roughly fit their contents."""
+def _add_sheet(workbook, name: str, table: list[list]) -> None:
+    """Write `table` to a new sheet and make column widths roughly fit their contents."""
     from openpyxl.utils import get_column_letter
-    for i, col in enumerate(df.columns, start=1):
-        longest = max([len(str(col))] + [len(str(v)) for v in df[col].tolist()])
-        worksheet.column_dimensions[get_column_letter(i)].width = min(max(10, longest + 2), 60)
+    sheet = workbook.create_sheet(name)
+    for values in table:
+        sheet.append(values)
+    for i, column in enumerate(zip(*table), start=1):
+        longest = max(len("" if v is None else str(v)) for v in column)
+        sheet.column_dimensions[get_column_letter(i)].width = min(max(10, longest + 2), 60)
+
+
+def _save_workbook(sheets: dict[str, list[list]], path: Path) -> None:
+    from openpyxl import Workbook
+    workbook = Workbook()
+    workbook.remove(workbook.active)       # start without the default empty sheet
+    for name, table in sheets.items():
+        _add_sheet(workbook, name, table)
+    workbook.save(path)
 
 
 def export_table(rows: list[dict], columns: list[tuple[str, str]], path) -> Path:
     """Save rows to .xlsx or .csv, depending on the file extension."""
     path = Path(path)
-    df = _dataframe(rows, columns)
+    table = _table(rows, columns)
     if path.suffix.lower() == ".csv":
         # utf-8-sig lets Excel open the CSV with accents etc. displayed correctly
-        df.to_csv(path, index=False, encoding="utf-8-sig")
+        with path.open("w", encoding="utf-8-sig", newline="") as f:
+            csv.writer(f).writerows(table)
     else:
         if path.suffix.lower() != ".xlsx":
             path = path.with_suffix(".xlsx")
-        import pandas as pd
-        with pd.ExcelWriter(path, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name="Data", index=False)
-            _autofit(writer.sheets["Data"], df)
+        _save_workbook({"Data": table}, path)
     return path
 
 
@@ -77,21 +87,16 @@ def top_day_rows(report: logic.PeriodReport) -> list[dict]:
 
 def export_report_excel(report: logic.PeriodReport, path) -> Path:
     """Save the whole report (a month or a date range) to one Excel file with several sheets."""
-    import pandas as pd
     path = Path(path)
     if path.suffix.lower() != ".xlsx":
         path = path.with_suffix(".xlsx")
-    sheets = {
-        "Summary": pd.DataFrame(summary_pairs(report), columns=["Item", "Value"]),
-        "Medicines": _dataframe(report.medicines, REPORT_MEDICINE_COLUMNS),
-        "Top 10": _dataframe(report.medicines[:10], REPORT_MEDICINE_COLUMNS[:4]),
-        "Busiest days": _dataframe(top_day_rows(report), REPORT_DAY_COLUMNS),
-        "Prescribers": _dataframe(report.prescribers, REPORT_PRESCRIBER_COLUMNS),
-    }
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        for name, df in sheets.items():
-            df.to_excel(writer, sheet_name=name, index=False)
-            _autofit(writer.sheets[name], df)
+    _save_workbook({
+        "Summary": [["Item", "Value"]] + [list(pair) for pair in summary_pairs(report)],
+        "Medicines": _table(report.medicines, REPORT_MEDICINE_COLUMNS),
+        "Top 10": _table(report.medicines[:10], REPORT_MEDICINE_COLUMNS[:4]),
+        "Busiest days": _table(top_day_rows(report), REPORT_DAY_COLUMNS),
+        "Prescribers": _table(report.prescribers, REPORT_PRESCRIBER_COLUMNS),
+    }, path)
     return path
 
 
