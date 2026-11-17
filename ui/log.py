@@ -1,4 +1,4 @@
-"""ui/log.py - Dispensing Log: every transaction, with filters, undo and export."""
+"""ui/log.py - Dispensing Log: every transaction, with filters, quantity edits, undo and export."""
 
 from datetime import date
 
@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 
 import exports
 import logic
+from ui.edit_entry import DeleteEntryDialog, EditEntryDialog
 from ui.models import Column, RecordTableModel, TableProxy, int_fmt, make_table, use_pills
 from ui.responsive import FlowLayout
 from ui.widgets import (
@@ -34,9 +35,10 @@ LOG_COLUMNS = [
 class LogPage(QWidget):
     data_changed = Signal()
 
-    def __init__(self, conn, parent=None):
+    def __init__(self, conn, parent=None, user_name: str = ""):
         super().__init__(parent)
         self.conn = conn
+        self.user_name = user_name   # recorded in the audit log for edits and deletes
 
         self.model = RecordTableModel(LOG_COLUMNS)
         self.proxy = TableProxy()
@@ -44,6 +46,7 @@ class LogPage(QWidget):
         self.view = make_table(self.model, self.proxy)
         self.view.sortByColumn(0, Qt.DescendingOrder)
         use_pills(self.view, LOG_COLUMNS, "type")
+        self.view.doubleClicked.connect(self.edit_entry)
 
         # --- filters ---
         self.use_dates = QCheckBox("Dates from")
@@ -79,6 +82,8 @@ class LogPage(QWidget):
             filters.addWidget(widget)
 
         # --- actions ---
+        edit_btn = make_button("Edit entry", icon_text="\u270E")
+        delete_btn = make_button("Delete entry", "danger", icon_text="\u2716")
         undo_btn = make_button("Undo last entry", "danger", icon_text="\u21b6")
         excel_btn = make_button("Export Excel", icon_text="\U0001F4C4")
         csv_btn = make_button("Export CSV", icon_text="\U0001F4C4")
@@ -86,7 +91,12 @@ class LogPage(QWidget):
         self.count_label.setWordWrap(False)
         actions = QHBoxLayout()
         actions.addWidget(self.count_label)
+        edit_hint = hint_label("   Double-click an entry to correct its quantity")
+        edit_hint.setWordWrap(False)
+        actions.addWidget(edit_hint)
         actions.addStretch()
+        actions.addWidget(edit_btn)
+        actions.addWidget(delete_btn)
         actions.addWidget(undo_btn)
 
         layout = page_layout(self)
@@ -102,6 +112,8 @@ class LogPage(QWidget):
             widget_signal.connect(self._apply_filters)
         self.use_dates.toggled.connect(self._update_date_enabled)
         clear_btn.clicked.connect(self._clear_filters)
+        edit_btn.clicked.connect(self.edit_entry)
+        delete_btn.clicked.connect(self.delete_entry)
         undo_btn.clicked.connect(self.undo_last)
         excel_btn.clicked.connect(lambda: self.export("xlsx"))
         csv_btn.clicked.connect(lambda: self.export("csv"))
@@ -155,6 +167,31 @@ class LogPage(QWidget):
         self.type_filter.setCurrentIndex(0)
         self.search.clear()
 
+    # --- edit ---------------------------------------------------------------
+    def _selected_row(self) -> dict | None:
+        index = self.view.currentIndex()
+        if not index.isValid():
+            return None
+        return self.model.row_dict(self.proxy.mapToSource(index).row())
+
+    def edit_entry(self, *_):
+        row = self._selected_row()
+        if row is None:
+            show_info(self, "Select an entry in the log first.", title="Edit entry")
+            return
+        if EditEntryDialog(self.conn, row, self, changed_by=self.user_name).exec():
+            show_info(self, "The entry was corrected.", title="Saved")
+            self.data_changed.emit()
+
+    def delete_entry(self, *_):
+        row = self._selected_row()
+        if row is None:
+            show_info(self, "Select an entry in the log first.", title="Delete entry")
+            return
+        if DeleteEntryDialog(self.conn, row, self, changed_by=self.user_name).exec():
+            show_info(self, "The entry was deleted.", title="Deleted")
+            self.data_changed.emit()
+
     # --- undo ---------------------------------------------------------------
     def undo_last(self):
         rows = logic.last_entry(self.conn)
@@ -174,7 +211,8 @@ class LogPage(QWidget):
                 title="Undo last entry", yes_text="Delete entry", no_text="Cancel"):
             return
         try:
-            logic.undo_last_entry(self.conn, expected_group=first["entry_group"])
+            logic.undo_last_entry(self.conn, expected_group=first["entry_group"],
+                                  changed_by=self.user_name)
         except logic.ValidationError as exc:
             show_error(self, str(exc))
             return

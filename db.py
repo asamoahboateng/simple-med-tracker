@@ -14,6 +14,8 @@ Design notes
 * Each transaction records who entered it (`entered_by`, the user's display name).
   Rows saved before sign-in existed carry PRE_LOGIN_ENTERED_BY.
 * User passwords are stored only as salted hashes (see auth.py).
+* Every edit, delete or undo of a log entry is recorded in `audit_log`, with a
+  copy of the entry, in the same database transaction as the change itself.
 * The connection runs in autocommit mode; multi-row saves are wrapped in
   `with transaction(conn):` so a failure never leaves partial data.
 """
@@ -24,7 +26,7 @@ from pathlib import Path
 
 from config import COMMON_UNITS
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 PRE_LOGIN_ENTERED_BY = "Before sign-in"
 
 SCHEMA = """
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS medicines (
     name          TEXT    NOT NULL COLLATE NOCASE UNIQUE,
     unit          TEXT    NOT NULL,
     reorder_level INTEGER NOT NULL DEFAULT 0 CHECK (reorder_level >= 0),
+    note          TEXT    NOT NULL DEFAULT '',
     created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -79,6 +82,26 @@ CREATE TABLE IF NOT EXISTS users (
     decided_at    TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS audit_log (            -- a copy of the entry, so deleted ones stay readable
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    changed_at   TEXT    NOT NULL,
+    changed_by   TEXT    NOT NULL,
+    action       TEXT    NOT NULL CHECK (action IN ('EDITED', 'DELETED', 'UNDONE')),
+    reason       TEXT    NOT NULL DEFAULT '',
+    tx_id        INTEGER NOT NULL,                  -- no foreign key: the entry may be gone
+    tx_date      TEXT    NOT NULL,
+    tx_type      TEXT    NOT NULL,
+    medicine     TEXT    NOT NULL,
+    unit         TEXT    NOT NULL,
+    batch_no     TEXT    NOT NULL,
+    old_quantity INTEGER NOT NULL,
+    new_quantity INTEGER,                           -- NULL when the entry was removed
+    patient_id   TEXT    NOT NULL DEFAULT '',
+    prescriber   TEXT    NOT NULL DEFAULT '',
+    entered_at   TEXT    NOT NULL,
+    entered_by   TEXT    NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_tx_medicine ON transactions(medicine_id);
 CREATE INDEX IF NOT EXISTS idx_tx_batch    ON transactions(batch_id);
 CREATE INDEX IF NOT EXISTS idx_tx_date     ON transactions(date);
@@ -118,6 +141,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if user_columns and "pin_hash" not in user_columns:
         # Version 2 had passwords only: add the optional 6-digit sign-in code.
         conn.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT NOT NULL DEFAULT ''")
+    medicine_columns = {r["name"] for r in conn.execute("PRAGMA table_info(medicines)")}
+    if medicine_columns and "note" not in medicine_columns:
+        # Version 4 had no medicine notes.
+        conn.execute("ALTER TABLE medicines ADD COLUMN note TEXT NOT NULL DEFAULT ''")
     had_units = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'units'").fetchone()
     conn.executescript(SCHEMA)
@@ -165,10 +192,10 @@ def get_medicine(conn, medicine_id: int):
     return conn.execute("SELECT * FROM medicines WHERE id = ?", (medicine_id,)).fetchone()
 
 
-def create_medicine(conn, name: str, unit: str, reorder_level: int) -> int:
+def create_medicine(conn, name: str, unit: str, reorder_level: int, note: str = "") -> int:
     cur = conn.execute(
-        "INSERT INTO medicines (name, unit, reorder_level) VALUES (?, ?, ?)",
-        (name.strip(), unit.strip(), int(reorder_level)),
+        "INSERT INTO medicines (name, unit, reorder_level, note) VALUES (?, ?, ?, ?)",
+        (name.strip(), unit.strip(), int(reorder_level), note.strip()),
     )
     return cur.lastrowid
 
@@ -201,7 +228,8 @@ def medicine_names(conn) -> list[str]:
 
 
 def update_medicine(conn, medicine_id: int, unit: str | None = None,
-                    reorder_level: int | None = None, name: str | None = None) -> None:
+                    reorder_level: int | None = None, name: str | None = None,
+                    note: str | None = None) -> None:
     if name is not None:
         conn.execute("UPDATE medicines SET name = ? WHERE id = ?", (name.strip(), medicine_id))
     if unit is not None:
@@ -209,6 +237,8 @@ def update_medicine(conn, medicine_id: int, unit: str | None = None,
     if reorder_level is not None:
         conn.execute("UPDATE medicines SET reorder_level = ? WHERE id = ?",
                      (int(reorder_level), medicine_id))
+    if note is not None:
+        conn.execute("UPDATE medicines SET note = ? WHERE id = ?", (note.strip(), medicine_id))
 
 
 def medicine_stock(conn, medicine_id: int) -> int:
@@ -315,6 +345,13 @@ def log_rows(conn):
     return conn.execute(LOG_SELECT + " ORDER BY t.date DESC, t.id DESC").fetchall()
 
 
+def medicine_log_rows(conn, medicine_id: int):
+    """One medicine's transactions, newest first."""
+    return conn.execute(
+        LOG_SELECT + " WHERE t.medicine_id = ? ORDER BY t.date DESC, t.id DESC", (medicine_id,)
+    ).fetchall()
+
+
 def last_entry_rows(conn):
     """All rows belonging to the most recently saved entry (highest id)."""
     last = conn.execute(
@@ -334,6 +371,72 @@ def delete_entry_group(conn, entry_group: str) -> int:
         "DELETE FROM batches WHERE id NOT IN (SELECT DISTINCT batch_id FROM transactions)"
     )
     return cur.rowcount
+
+
+def get_transaction(conn, tx_id: int):
+    return conn.execute(LOG_SELECT + " WHERE t.id = ?", (tx_id,)).fetchone()
+
+
+def batch_movements(conn, batch_id: int):
+    """One batch's transactions in the order they were entered."""
+    return conn.execute(
+        "SELECT id, type, quantity FROM transactions WHERE batch_id = ? ORDER BY id",
+        (batch_id,),
+    ).fetchall()
+
+
+def update_transaction_quantity(conn, tx_id: int, quantity: int, stock_change: int) -> None:
+    """
+    Set one row's quantity and shift `balance_after` by `stock_change` on that row
+    and every later row of the same medicine.
+    """
+    conn.execute("UPDATE transactions SET quantity = ? WHERE id = ?", (int(quantity), tx_id))
+    conn.execute(
+        """
+        UPDATE transactions SET balance_after = balance_after + ?
+        WHERE id >= ? AND medicine_id = (SELECT medicine_id FROM transactions WHERE id = ?)
+        """,
+        (int(stock_change), tx_id, tx_id),
+    )
+
+
+def delete_transaction(conn, tx_id: int, stock_change: int) -> None:
+    """
+    Delete one row, shift `balance_after` by `stock_change` on every later row of
+    the same medicine, and remove its batch if no transactions are left in it.
+    """
+    conn.execute(
+        """
+        UPDATE transactions SET balance_after = balance_after + ?
+        WHERE id > ? AND medicine_id = (SELECT medicine_id FROM transactions WHERE id = ?)
+        """,
+        (int(stock_change), tx_id, tx_id),
+    )
+    conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+    conn.execute(
+        "DELETE FROM batches WHERE id NOT IN (SELECT DISTINCT batch_id FROM transactions)"
+    )
+
+
+def add_audit(conn, tx, *, action: str, changed_at: str, changed_by: str,
+              new_quantity: int | None = None, reason: str = "") -> None:
+    """Record a change to log row `tx` (a LOG_SELECT row, read BEFORE the change)."""
+    conn.execute(
+        """
+        INSERT INTO audit_log
+            (changed_at, changed_by, action, reason, tx_id, tx_date, tx_type, medicine, unit,
+             batch_no, old_quantity, new_quantity, patient_id, prescriber, entered_at, entered_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (changed_at, changed_by.strip(), action, reason.strip(), tx["id"], tx["date"], tx["type"],
+         tx["medicine"], tx["unit"], tx["batch_no"], int(tx["quantity"]), new_quantity,
+         tx["patient_id"], tx["prescriber"], tx["entered_at"], tx["entered_by"]),
+    )
+
+
+def audit_rows(conn):
+    """Every recorded change, newest first."""
+    return conn.execute("SELECT * FROM audit_log ORDER BY id DESC").fetchall()
 
 
 def prescribers(conn) -> list[str]:
@@ -363,7 +466,7 @@ def medicine_summary(conn):
             FROM batches b LEFT JOIN transactions t ON t.batch_id = b.id
             GROUP BY b.id
         )
-        SELECT m.id, m.name, m.unit, m.reorder_level,
+        SELECT m.id, m.name, m.unit, m.reorder_level, m.note,
                COALESCE((SELECT SUM(quantity) FROM transactions
                          WHERE medicine_id = m.id AND type = 'STOCK_IN'), 0) AS received,
                COALESCE((SELECT SUM(quantity) FROM transactions
@@ -380,7 +483,7 @@ def batch_summary(conn):
     """One row per batch with received / dispensed / remaining."""
     return conn.execute(
         """
-        SELECT b.id, m.name AS medicine, m.unit, b.batch_no, b.expiry_date,
+        SELECT b.id, b.medicine_id, m.name AS medicine, m.unit, b.batch_no, b.expiry_date,
                COALESCE(SUM(CASE WHEN t.type = 'STOCK_IN'  THEN t.quantity END), 0) AS received,
                COALESCE(SUM(CASE WHEN t.type = 'DISPENSED' THEN t.quantity END), 0) AS dispensed
         FROM batches b

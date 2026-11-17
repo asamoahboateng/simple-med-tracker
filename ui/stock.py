@@ -23,6 +23,7 @@ MEDICINE_COLUMNS = [
     Column("stock", "Current stock", "right", int_fmt),
     Column("status", "Status", "center"),
     Column("nearest_expiry", "Nearest expiry"),
+    Column("note", "Note", editable=True),
 ]
 
 BATCH_COLUMNS = [
@@ -91,7 +92,7 @@ class StockPage(QWidget):
         use_pills(self.med_view, MEDICINE_COLUMNS, "status")
 
         med_card = Card("Medicines")
-        edit_hint = hint_label("   Double-click Medicine, Unit or Reorder level to edit")
+        edit_hint = hint_label("   Double-click Medicine, Unit, Reorder level or Note to edit")
         edit_hint.setWordWrap(False)
         med_card.header.insertWidget(1, edit_hint)
         med_card.header.addWidget(_search_box("\U0001F50D  Search medicines", self.med_proxy))
@@ -163,7 +164,7 @@ class StockPage(QWidget):
         return None
 
     def _save_edit(self, row: dict, key: str, value) -> bool:
-        """Called when the user edits Medicine, Unit or Reorder level in the table."""
+        """Called when the user edits Medicine, Unit, Reorder level or Note in the table."""
         try:
             if key == "name":
                 logic.rename_medicine(self.conn, row["id"], value)
@@ -171,6 +172,8 @@ class StockPage(QWidget):
                 logic.update_medicine_settings(self.conn, row["id"], unit=value)
             elif key == "reorder_level":
                 logic.update_medicine_settings(self.conn, row["id"], reorder_level=value)
+            elif key == "note":
+                logic.update_medicine_settings(self.conn, row["id"], note=value)
             else:
                 return False
         except logic.ValidationError as exc:

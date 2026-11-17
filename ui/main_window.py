@@ -14,11 +14,13 @@ import auth
 import config
 import db
 from ui.add_stock import AddStockDialog
+from ui.audit import AuditPage
 from ui.dashboard import DashboardPage
 from ui.dispense import DispenseDialog
 from ui.log import LogPage
 from ui.medicine import NewMedicineDialog
 from ui.report import ReportPage
+from ui.search import SearchPage
 from ui import icons, theme
 from ui.stock import StockPage
 from ui.units import UnitsDialog
@@ -47,12 +49,16 @@ class MainWindow(QMainWindow):
 
         # --- pages ---
         self.dashboard = DashboardPage(conn)
-        self.log_page = LogPage(conn)
+        self.search_page = SearchPage(conn, user_name=user.display_name)
+        self.log_page = LogPage(conn, user_name=user.display_name)
+        self.audit_page = AuditPage(conn)
         self.stock_page = StockPage(conn)
         self.report_page = ReportPage(conn)
         self.pages = [
             ("Dashboard", "dashboard", self.dashboard),
+            ("Search", "search", self.search_page),
             ("Dispensing Log", "log", self.log_page),
+            ("Audit Log", "audit", self.audit_page),
             ("Stock & Batches", "stock", self.stock_page),
             ("Reports", "report", self.report_page),
         ]
@@ -81,6 +87,7 @@ class MainWindow(QMainWindow):
         self.dashboard.reorder_levels_requested.connect(
             lambda: self.sidebar.setCurrentRow(self.stack.indexOf(self.stock_page)))
         self.log_page.data_changed.connect(self.data_changed)
+        self.search_page.data_changed.connect(self.data_changed)
         self.stock_page.data_changed.connect(self.data_changed)
         self.stock_page.new_medicine_requested.connect(self.open_new_medicine)
         self.stock_page.units_requested.connect(self.open_units)
@@ -253,6 +260,11 @@ class MainWindow(QMainWindow):
                 self.conn, self, entered_by=self.user.display_name).exec():
             self.data_changed()
 
+    def open_search(self):
+        self.sidebar.setCurrentRow(self.stack.indexOf(self.search_page))
+        self.search_page.search.setFocus()
+        self.search_page.search.selectAll()
+
     def open_units(self):
         if self.check_access():
             UnitsDialog(self.conn, self).exec()
@@ -363,6 +375,7 @@ class MainWindow(QMainWindow):
         self._action(entries, "Units...", self.open_units)
 
         view_menu = bar.addMenu("&View")
+        self._action(view_menu, "Search medicines", self.open_search, "Ctrl+F")
         colours = view_menu.addMenu("Colour theme")
         group = QActionGroup(self)
         for name, preset in theme.PRESETS.items():

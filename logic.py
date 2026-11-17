@@ -37,6 +37,11 @@ BATCH_EXPIRING = "Expiring soon"
 BATCH_EXPIRED = "EXPIRED"
 BATCH_USED_UP = "Used up"
 
+# Audit log actions
+AUDIT_EDITED = "EDITED"
+AUDIT_DELETED = "DELETED"
+AUDIT_UNDONE = "UNDONE"
+
 
 # --------------------------------------------------------------------------
 # Errors
@@ -410,11 +415,13 @@ def last_entry(conn) -> list:
     return db.last_entry_rows(conn)
 
 
-def undo_last_entry(conn, expected_group: str | None = None) -> list:
+def undo_last_entry(conn, expected_group: str | None = None, changed_by: str = "",
+                    now: datetime | None = None) -> list:
     """
     Delete the most recent entry. If `expected_group` is given, only delete
     if it is still the most recent one (protects against deleting the wrong
     entry if something changed after the user was asked to confirm).
+    Each removed row is recorded in the audit log.
     """
     with db.transaction(conn):
         rows = db.last_entry_rows(conn)
@@ -423,12 +430,90 @@ def undo_last_entry(conn, expected_group: str | None = None) -> list:
         group = rows[0]["entry_group"]
         if expected_group is not None and group != expected_group:
             raise ValidationError("The latest entry has changed. Please try again.")
+        changed_at = _now_text(now)
+        for row in rows:
+            db.add_audit(conn, row, action=AUDIT_UNDONE, changed_at=changed_at,
+                         changed_by=clean(changed_by))
         db.delete_entry_group(conn, group)
     return rows
 
 
-def create_medicine(conn, name, unit, reorder_level=0) -> int:
-    """Add a new medicine (with no stock yet). Names must be unique, ignoring case."""
+# --------------------------------------------------------------------------
+# Edit a logged entry
+# --------------------------------------------------------------------------
+
+def edit_quantity(conn, tx_id: int, new_quantity, changed_by: str = "", reason: str = "",
+                  now: datetime | None = None) -> int:
+    """
+    Correct the quantity of one logged row (stock in or dispensed). Stock is
+    recalculated from the log, and 'Balance After' is shifted on this row and
+    every later row of the same medicine. The batch may never go below zero at
+    any point in its history. The change is recorded in the audit log.
+    Returns the medicine's new stock.
+    """
+    new_quantity = validate_quantity(new_quantity)
+    with db.transaction(conn):
+        tx = db.get_transaction(conn, tx_id)
+        if tx is None:
+            raise ValidationError("This entry no longer exists.")
+        old_quantity = int(tx["quantity"])
+        sign = 1 if tx["type"] == STOCK_IN else -1
+        stock_change = sign * (new_quantity - old_quantity)
+
+        lowest = _lowest_batch_balance(conn, tx)
+        if lowest + stock_change < 0:
+            if tx["type"] == DISPENSED:
+                raise InsufficientStockError(
+                    f"Batch {tx['batch_no']} doesn't have enough stock. This entry can be "
+                    f"at most {old_quantity + lowest} {tx['unit']}.")
+            raise InsufficientStockError(
+                f"Stock from batch {tx['batch_no']} has already been dispensed. This entry "
+                f"must be at least {old_quantity - lowest} {tx['unit']}.")
+
+        if stock_change:
+            db.add_audit(conn, tx, action=AUDIT_EDITED, changed_at=_now_text(now),
+                         changed_by=clean(changed_by), new_quantity=new_quantity,
+                         reason=clean(reason))
+            db.update_transaction_quantity(conn, tx_id, new_quantity, stock_change)
+        return db.medicine_stock(conn, tx["medicine_id"])
+
+
+def delete_entry(conn, tx_id: int, changed_by: str = "", reason: str = "",
+                 now: datetime | None = None) -> int:
+    """
+    Permanently delete one logged row (stock in or dispensed). 'Balance After'
+    is shifted on every later row of the same medicine, and a batch left with
+    no entries is removed. Deleting stock that was later dispensed is blocked.
+    The entry is copied to the audit log. Returns the medicine's new stock.
+    """
+    with db.transaction(conn):
+        tx = db.get_transaction(conn, tx_id)
+        if tx is None:
+            raise ValidationError("This entry no longer exists.")
+        quantity = int(tx["quantity"])
+        stock_change = -quantity if tx["type"] == STOCK_IN else quantity
+        if _lowest_batch_balance(conn, tx) + stock_change < 0:
+            raise InsufficientStockError(
+                f"Stock from batch {tx['batch_no']} has already been dispensed, so this "
+                f"entry can't be deleted. Delete or correct those dispensing entries first.")
+        db.add_audit(conn, tx, action=AUDIT_DELETED, changed_at=_now_text(now),
+                     changed_by=clean(changed_by), reason=clean(reason))
+        db.delete_transaction(conn, tx_id, stock_change)
+        return db.medicine_stock(conn, tx["medicine_id"])
+
+
+def _lowest_batch_balance(conn, tx) -> int:
+    """Lowest balance of `tx`'s batch from that row onwards, in the order entered."""
+    running, lowest = 0, None
+    for m in db.batch_movements(conn, tx["batch_id"]):
+        running += m["quantity"] if m["type"] == STOCK_IN else -m["quantity"]
+        if m["id"] >= tx["id"]:
+            lowest = running if lowest is None else min(lowest, running)
+    return lowest
+
+
+def create_medicine(conn, name, unit, reorder_level=0, note="") -> int:
+    """Add a new medicine (with no stock yet), with an optional note. Names must be unique, ignoring case."""
     name = require_text(name, "Medicine name")
     unit = require_text(unit, "Unit")
     level = validate_reorder_level(reorder_level)
@@ -437,17 +522,20 @@ def create_medicine(conn, name, unit, reorder_level=0) -> int:
         if existing is not None:
             raise ValidationError(f"'{existing['name']}' already exists.")
         db.add_unit(conn, unit)                 # a unit typed here joins the list
-        return db.create_medicine(conn, name, unit, level)
+        return db.create_medicine(conn, name, unit, level, clean(note))
 
 
-def update_medicine_settings(conn, medicine_id: int, unit=None, reorder_level=None) -> None:
-    """Edit a medicine's unit and/or reorder level."""
+def update_medicine_settings(conn, medicine_id: int, unit=None, reorder_level=None,
+                             note=None) -> None:
+    """Edit a medicine's unit, reorder level and/or note (an empty note clears it)."""
     if unit is not None:
         unit = require_text(unit, "Unit")
         db.add_unit(conn, unit)
     if reorder_level is not None:
         reorder_level = validate_reorder_level(reorder_level)
-    db.update_medicine(conn, medicine_id, unit=unit, reorder_level=reorder_level)
+    if note is not None:
+        note = clean(note)
+    db.update_medicine(conn, medicine_id, unit=unit, reorder_level=reorder_level, note=note)
 
 
 # --------------------------------------------------------------------------
@@ -522,7 +610,7 @@ def medicine_rows(conn) -> list[dict]:
         stock = int(r["received"]) - int(r["dispensed"])
         rows.append({
             "id": r["id"], "name": r["name"], "unit": r["unit"],
-            "reorder_level": int(r["reorder_level"]),
+            "reorder_level": int(r["reorder_level"]), "note": r["note"],
             "received": int(r["received"]), "dispensed": int(r["dispensed"]),
             "stock": stock, "status": stock_status(stock, int(r["reorder_level"])),
             "nearest_expiry": r["nearest_expiry"],
@@ -537,8 +625,8 @@ def batch_rows(conn, today: date | None = None) -> list[dict]:
     for r in db.batch_summary(conn):
         remaining = int(r["received"]) - int(r["dispensed"])
         rows.append({
-            "id": r["id"], "medicine": r["medicine"], "unit": r["unit"],
-            "batch_no": r["batch_no"], "expiry": r["expiry_date"],
+            "id": r["id"], "medicine_id": r["medicine_id"], "medicine": r["medicine"],
+            "unit": r["unit"], "batch_no": r["batch_no"], "expiry": r["expiry_date"],
             "received": int(r["received"]), "dispensed": int(r["dispensed"]),
             "remaining": remaining,
             "days_to_expiry": days_to_expiry(r["expiry_date"], today),
@@ -549,6 +637,38 @@ def batch_rows(conn, today: date | None = None) -> list[dict]:
 
 def log_rows(conn) -> list[dict]:
     return [dict(r) for r in db.log_rows(conn)]
+
+
+def audit_rows(conn) -> list[dict]:
+    """Audit log rows for display, newest first."""
+    rows = []
+    for r in db.audit_rows(conn):
+        row = dict(r)
+        old, new = row["old_quantity"], row["new_quantity"]
+        row["change"] = f"{old:,} \u2192 {new:,}" if new is not None else f"{old:,} \u2192 removed"
+        rows.append(row)
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Search
+# --------------------------------------------------------------------------
+
+def search_medicines(conn, text) -> list[dict]:
+    """Medicine rows whose name or note contains `text` (ignoring case). Empty text = all."""
+    text = clean(text).casefold()
+    return [r for r in medicine_rows(conn)
+            if text in r["name"].casefold() or text in r["note"].casefold()]
+
+
+def medicine_log(conn, medicine_id: int) -> list[dict]:
+    """Every log row for one medicine, newest first."""
+    return [dict(r) for r in db.medicine_log_rows(conn, medicine_id)]
+
+
+def medicine_batches(conn, medicine_id: int, today: date | None = None) -> list[dict]:
+    """Batch rows (as on Stock & Batches) for one medicine."""
+    return [r for r in batch_rows(conn, today) if r["medicine_id"] == medicine_id]
 
 
 # --------------------------------------------------------------------------

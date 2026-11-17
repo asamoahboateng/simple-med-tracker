@@ -24,6 +24,9 @@ class NewMedicineDialog(QDialog):
         self.reorder_spin.setRange(0, 10_000_000)
         self.reorder_spin.setValue(10)
         self.reorder_spin.setToolTip("Show a LOW STOCK warning when stock falls to this level")
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText("Optional, e.g. Store below 25\u00b0C")
+        self.note_edit.setMaxLength(500)
 
         note = QLabel("The medicine starts with no stock. Use Add Stock to record deliveries.")
         note.setWordWrap(True)
@@ -33,6 +36,7 @@ class NewMedicineDialog(QDialog):
         form.addRow("Medicine name:", self.name_edit)
         form.addRow("Unit:", unit_box)
         form.addRow("Reorder level:", self.reorder_spin)
+        form.addRow("Note:", self.note_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
@@ -50,7 +54,7 @@ class NewMedicineDialog(QDialog):
     def save(self):
         try:
             logic.create_medicine(self.conn, self.name_edit.text(), self.unit_combo.currentText(),
-                                  self.reorder_spin.value())
+                                  self.reorder_spin.value(), self.note_edit.text())
         except logic.ValidationError as exc:
             show_error(self, str(exc))
             return

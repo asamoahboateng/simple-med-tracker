@@ -1,5 +1,7 @@
 """Stock is always calculated from transactions: received minus dispensed."""
 
+import sqlite3
+
 import pytest
 
 import db
@@ -183,3 +185,29 @@ def test_existing_database_gets_its_units_listed(tmp_path):
     old.close()
     conn = db.connect(path)
     assert "boxes of 100" in logic.unit_names(conn)
+
+
+def test_medicine_note_is_optional_and_editable(conn):
+    logic.create_medicine(conn, "Zinc 20mg", "tablets", 30)
+    logic.create_medicine(conn, "Insulin", "vials", 5, note="  Keep refrigerated ")
+    notes = {r["name"]: r["note"] for r in logic.medicine_rows(conn)}
+    assert notes == {"Insulin": "Keep refrigerated", "Zinc 20mg": ""}
+
+    med_id = db.find_medicine(conn, "Zinc 20mg")["id"]
+    logic.update_medicine_settings(conn, med_id, note="Chewable")
+    assert db.get_medicine(conn, med_id)["note"] == "Chewable"
+    logic.update_medicine_settings(conn, med_id, note="  ")
+    assert db.get_medicine(conn, med_id)["note"] == ""
+
+
+def test_old_database_gets_medicine_notes(tmp_path):
+    path = tmp_path / "v4.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA.replace("    note          TEXT    NOT NULL DEFAULT '',\n", ""))
+    old.execute("INSERT INTO medicines (name, unit) VALUES ('Paracetamol', 'tablets')")
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    assert logic.medicine_rows(conn)[0]["note"] == ""
+    conn.close()

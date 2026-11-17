@@ -6,6 +6,8 @@ local SQLite database file.
 
 - **Dashboard**: summary figures; what needs attention (out of stock, expiring, expired); an expiry shelf showing every batch by the month it expires; running low, stock health and this month's dispensing
 - **Add Stock** / **Record Dispensed**: data-entry dialogs. Dispensing takes stock from the batch that expires first (FEFO) automatically.
+- **Search** (Ctrl+F): find a medicine by name or note and see its details, batches and full log
+- **Audit Log**: who edited, deleted or undid which entry, when, and why
 - **Dispensing Log**: every entry, with filters, undo, and Excel/CSV export
 - **Stock & Batches**: current stock per medicine and per batch, colour-coded
 - **Reports**: a month or any date range (quick picks for the last 7, 30 or 90 days), compared with the period before; a day-by-day calendar, top 10 medicines, pace, busiest weekdays and hours, prescriber share, days of stock left and a ranked table, with Excel and PDF export
@@ -297,7 +299,8 @@ When you release a new version, update `APP_VERSION` in `config.py`, then push a
 ### Everyday tasks
 
 - **New medicine**: use the **➕ New medicine** button on the Stock & Batches page, or
-  **Entries → New Medicine** (Ctrl+M). Enter the name, unit and reorder level. The medicine
+  **Entries → New Medicine** (Ctrl+M). Enter the name, unit and reorder level, and optionally a note (for example
+  storage instructions). The medicine
   starts with no stock, so it shows as OUT OF STOCK until you add stock.
 - **Units**: **Entries → Units…**, the **Units** button on Stock & Batches, or **Manage units**
   next to any Unit drop-down. Add units such as strips, rolls or "boxes of 100" and they appear
@@ -312,7 +315,16 @@ When you release a new version, update `APP_VERSION` in `config.py`, then push a
   Expired batches and quantities larger than the available stock are blocked. After saving,
   the app shows which batches were used and warns you if stock is now **LOW**.
 - **Dispensing Log → Undo last entry**: shows the most recent entry and deletes it after you confirm.
-- **Stock & Batches**: double-click a medicine's **name**, **Unit** or **Reorder level**, or a batch's **Batch No** or **Expiry**, to change them.
+- **Dispensing Log → correct a quantity**: double-click any entry (stock in or dispensed), or select
+  it and click **Edit entry**. A window shows the entry and how the stock will change as you type
+  the correct quantity; stock and **Balance After** are recalculated when you save.
+- **Delete an entry**: select it on the Dispensing Log (or in a medicine's log on Search) and click
+  **Delete entry**. Type `DELETE` to confirm. Stock is recalculated; deleting stock that was
+  later dispensed is blocked until those dispensing entries are corrected or deleted.
+- **Audit Log**: every quantity correction, delete and undo is recorded automatically with who
+  did it, when, the optional **Reason** typed in the pop-up, and a full copy of the entry (so
+  deleted entries can still be read). The audit log can be filtered and exported, but not changed. A change that would make a batch go below zero is blocked.
+- **Stock & Batches**: double-click a medicine's **name**, **Unit**, **Reorder level** or **Note**, or a batch's **Batch No** or **Expiry**, to change them.
   Other values are calculated and can't be edited.
 - **Colours**: **View → Colour theme** switches between Bottle green, Navy, Ocean blue, Teal,
   Plum and Charcoal. The change applies at once and is remembered on that computer. Red, amber
