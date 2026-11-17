@@ -13,6 +13,8 @@ Main rules
 * Stock and dispensing dates cannot be in the future.
 * Dispensing uses FEFO (first-expiry-first-out): take from the batch that
   expires soonest, skip expired batches, and split across batches if needed.
+* Removing stock (expired, recalled, damaged...) also goes earliest expiry
+  first, but expired batches are included: they are usually what is removed.
 * A batch counts as expired for dispensing when its expiry date is BEFORE the
   dispensing date (it can still be used on its expiry day).
 """
@@ -27,6 +29,11 @@ from config import EXPIRY_WARNING_DAYS
 
 STOCK_IN = "STOCK_IN"
 DISPENSED = "DISPENSED"
+REMOVED = "REMOVED"
+TYPE_NAMES = {STOCK_IN: "Stock in", DISPENSED: "Dispensed", REMOVED: "Removed"}
+
+# Suggested reasons for removing stock (any other text is allowed too).
+REMOVAL_REASONS = ["Expired", "Recalled", "Damaged", "Lost or stolen", "Other"]
 
 # Status labels (also used by the UI for colour coding)
 STATUS_OK = "OK"
@@ -197,9 +204,30 @@ def allocate_fefo(batches: list[BatchStock], quantity: int, on_date: date) -> li
             f"Not enough usable stock: {quantity} requested but only {available} "
             f"available in non-expired batches."
         )
+    return _take_in_order(usable, quantity)
+
+
+def removable_batches(batches: list[BatchStock]) -> list[BatchStock]:
+    """Batches with stock, expired or not, soonest expiry first."""
+    return sorted([b for b in batches if b.remaining > 0], key=lambda b: (b.expiry, b.batch_id))
+
+
+def allocate_removal(batches: list[BatchStock], quantity: int) -> list[Allocation]:
+    """Like FEFO, but expired batches are included (they are usually what is removed)."""
+    quantity = validate_quantity(quantity)
+    candidates = removable_batches(batches)
+    available = sum(b.remaining for b in candidates)
+    if available < quantity:
+        raise InsufficientStockError(
+            f"Not enough stock: {quantity} to remove but only {available} in stock.")
+    return _take_in_order(candidates, quantity)
+
+
+def _take_in_order(batches: list[BatchStock], quantity: int) -> list[Allocation]:
+    """Take `quantity` from `batches` in the order given (they hold enough in total)."""
     allocations: list[Allocation] = []
     still_needed = quantity
-    for b in usable:
+    for b in batches:
         take = min(b.remaining, still_needed)
         allocations.append(Allocation(b.batch_id, b.batch_no, b.expiry, take))
         still_needed -= take
@@ -213,6 +241,14 @@ def load_batch_stock(conn, medicine_id: int) -> list[BatchStock]:
         BatchStock(r["id"], r["batch_no"], to_date(r["expiry_date"]), int(r["remaining"]))
         for r in db.batches_for_medicine(conn, medicine_id)
     ]
+
+
+def batches_with_stock(conn, medicine_name: str) -> list[BatchStock]:
+    """Batches the user may pick in the Remove Stock dialog (expired ones included)."""
+    med = db.find_medicine(conn, clean(medicine_name))
+    if med is None:
+        return []
+    return removable_batches(load_batch_stock(conn, med["id"]))
 
 
 def dispensable_batches(conn, medicine_name: str, on_date) -> list[BatchStock]:
@@ -407,6 +443,63 @@ def dispense(conn, dispense_date, medicine_name, quantity, batch_no: str | None 
 
 
 # --------------------------------------------------------------------------
+# Remove stock (expired, recalled, damaged...)
+# --------------------------------------------------------------------------
+
+def remove_stock(conn, remove_date, medicine_name, quantity, reason, batch_no: str | None = None,
+                 today: date | None = None, now: datetime | None = None,
+                 entered_by: str = "") -> DispenseResult:
+    """
+    Take stock out without dispensing it. batch_no=None (or "") takes from the
+    earliest-expiring batches first, expired ones included, splitting across
+    batches if needed. All rows are saved in one database transaction.
+    """
+    today = today or date.today()
+    remove_date = to_date(remove_date)
+    quantity = validate_quantity(quantity)
+    medicine_name = require_text(medicine_name, "Medicine")
+    reason = require_text(reason, "Reason")
+    batch_no = clean(batch_no)
+    validate_not_future(remove_date, today, "removal")
+
+    with db.transaction(conn):
+        med = db.find_medicine(conn, medicine_name)
+        if med is None:
+            raise ValidationError(f"'{medicine_name}' is not in the list of medicines.")
+        batches = load_batch_stock(conn, med["id"])
+
+        if batch_no:
+            chosen = next((b for b in batches if b.batch_no.casefold() == batch_no.casefold()), None)
+            if chosen is None:
+                raise ValidationError(f"Batch '{batch_no}' was not found for {med['name']}.")
+            if chosen.remaining < quantity:
+                raise InsufficientStockError(
+                    f"Batch {chosen.batch_no} only has {chosen.remaining} {med['unit']} left "
+                    f"({quantity} to remove).")
+            allocations = [Allocation(chosen.batch_id, chosen.batch_no, chosen.expiry, quantity)]
+        else:
+            allocations = allocate_removal(batches, quantity)
+
+        balance = db.medicine_stock(conn, med["id"])
+        group = uuid.uuid4().hex
+        entered_at = _now_text(now)
+        for alloc in allocations:
+            balance -= alloc.quantity
+            db.insert_transaction(
+                conn, tx_date=remove_date.isoformat(), medicine_id=med["id"],
+                batch_id=alloc.batch_id, tx_type=REMOVED, quantity=alloc.quantity,
+                balance_after=balance, entry_group=group, entered_at=entered_at,
+                entered_by=clean(entered_by), reason=reason,
+            )
+
+    return DispenseResult(
+        medicine_name=med["name"], unit=med["unit"], quantity=quantity,
+        allocations=allocations, remaining_stock=balance,
+        reorder_level=int(med["reorder_level"]),
+    )
+
+
+# --------------------------------------------------------------------------
 # Undo
 # --------------------------------------------------------------------------
 
@@ -445,37 +538,43 @@ def undo_last_entry(conn, expected_group: str | None = None, changed_by: str = "
 def edit_quantity(conn, tx_id: int, new_quantity, changed_by: str = "", reason: str = "",
                   now: datetime | None = None) -> int:
     """
-    Correct the quantity of one logged row (stock in or dispensed). Stock is
-    recalculated from the log, and 'Balance After' is shifted on this row and
-    every later row of the same medicine. The batch may never go below zero at
-    any point in its history. The change is recorded in the audit log.
+    Correct the quantity of one logged row (stock in, dispensed or removed).
+    Stock is recalculated from the log, and 'Balance After' is shifted on this
+    row and every later row of the same medicine. The batch may never go below
+    zero at any point in its history. The change is recorded in the audit log.
     Returns the medicine's new stock.
     """
     new_quantity = validate_quantity(new_quantity)
     with db.transaction(conn):
-        tx = db.get_transaction(conn, tx_id)
-        if tx is None:
-            raise ValidationError("This entry no longer exists.")
-        old_quantity = int(tx["quantity"])
-        sign = 1 if tx["type"] == STOCK_IN else -1
-        stock_change = sign * (new_quantity - old_quantity)
+        return _edit_quantity(conn, tx_id, new_quantity, changed_by, reason, now)
 
-        lowest = _lowest_batch_balance(conn, tx)
-        if lowest + stock_change < 0:
-            if tx["type"] == DISPENSED:
-                raise InsufficientStockError(
-                    f"Batch {tx['batch_no']} doesn't have enough stock. This entry can be "
-                    f"at most {old_quantity + lowest} {tx['unit']}.")
+
+def _edit_quantity(conn, tx_id: int, new_quantity: int, changed_by: str, reason: str,
+                   now: datetime | None) -> int:
+    """edit_quantity() inside a transaction the caller has already started."""
+    tx = db.get_transaction(conn, tx_id)
+    if tx is None:
+        raise ValidationError("This entry no longer exists.")
+    old_quantity = int(tx["quantity"])
+    sign = 1 if tx["type"] == STOCK_IN else -1
+    stock_change = sign * (new_quantity - old_quantity)
+
+    lowest = _lowest_batch_balance(conn, tx)
+    if lowest + stock_change < 0:
+        if tx["type"] != STOCK_IN:
             raise InsufficientStockError(
-                f"Stock from batch {tx['batch_no']} has already been dispensed. This entry "
-                f"must be at least {old_quantity - lowest} {tx['unit']}.")
+                f"Batch {tx['batch_no']} doesn't have enough stock. This entry can be "
+                f"at most {old_quantity + lowest} {tx['unit']}.")
+        raise InsufficientStockError(
+            f"Stock from batch {tx['batch_no']} has already been dispensed or removed. "
+            f"This entry must be at least {old_quantity - lowest} {tx['unit']}.")
 
-        if stock_change:
-            db.add_audit(conn, tx, action=AUDIT_EDITED, changed_at=_now_text(now),
-                         changed_by=clean(changed_by), new_quantity=new_quantity,
-                         reason=clean(reason))
-            db.update_transaction_quantity(conn, tx_id, new_quantity, stock_change)
-        return db.medicine_stock(conn, tx["medicine_id"])
+    if stock_change:
+        db.add_audit(conn, tx, action=AUDIT_EDITED, changed_at=_now_text(now),
+                     changed_by=clean(changed_by), new_quantity=new_quantity,
+                     reason=clean(reason))
+        db.update_transaction_quantity(conn, tx_id, new_quantity, stock_change)
+    return db.medicine_stock(conn, tx["medicine_id"])
 
 
 def delete_entry(conn, tx_id: int, changed_by: str = "", reason: str = "",
@@ -494,8 +593,8 @@ def delete_entry(conn, tx_id: int, changed_by: str = "", reason: str = "",
         stock_change = -quantity if tx["type"] == STOCK_IN else quantity
         if _lowest_batch_balance(conn, tx) + stock_change < 0:
             raise InsufficientStockError(
-                f"Stock from batch {tx['batch_no']} has already been dispensed, so this "
-                f"entry can't be deleted. Delete or correct those dispensing entries first.")
+                f"Stock from batch {tx['batch_no']} has already been dispensed or removed, "
+                f"so this entry can't be deleted. Delete or correct those entries first.")
         db.add_audit(conn, tx, action=AUDIT_DELETED, changed_at=_now_text(now),
                      changed_by=clean(changed_by), reason=clean(reason))
         db.delete_transaction(conn, tx_id, stock_change)
@@ -506,7 +605,7 @@ def _lowest_batch_balance(conn, tx) -> int:
     """Lowest balance of `tx`'s batch from that row onwards, in the order entered."""
     running, lowest = 0, None
     for m in db.batch_movements(conn, tx["batch_id"]):
-        running += m["quantity"] if m["type"] == STOCK_IN else -m["quantity"]
+        running += m["quantity"] if m["type"] == STOCK_IN else -m["quantity"]  # out = dispensed/removed
         if m["id"] >= tx["id"]:
             lowest = running if lowest is None else min(lowest, running)
     return lowest
@@ -588,15 +687,48 @@ def update_batch(conn, batch_id: int, batch_no=None, expiry_date=None) -> None:
     if expiry_date is not None:
         expiry_date = to_date(expiry_date).isoformat()
     with db.transaction(conn):
-        batch = db.get_batch(conn, batch_id)
-        if batch is None:
-            raise ValidationError("This batch no longer exists.")
-        if batch_no is not None:
-            existing = db.find_batch(conn, batch["medicine_id"], batch_no)
-            if existing is not None and existing["id"] != batch_id:
+        _update_batch(conn, batch_id, batch_no, expiry_date)
+
+
+def _update_batch(conn, batch_id: int, batch_no: str | None, expiry_date: str | None) -> None:
+    """update_batch() inside a transaction the caller has already started."""
+    batch = db.get_batch(conn, batch_id)
+    if batch is None:
+        raise ValidationError("This batch no longer exists.")
+    if batch_no is not None:
+        existing = db.find_batch(conn, batch["medicine_id"], batch_no)
+        if existing is not None and existing["id"] != batch_id:
+            raise ValidationError(
+                f"Batch '{existing['batch_no']}' already exists for this medicine.")
+    db.update_batch(conn, batch_id, batch_no=batch_no, expiry_date=expiry_date)
+
+
+def batch_deliveries(conn, batch_id: int) -> list[dict]:
+    """The stock-in entries of one batch, oldest first."""
+    return [dict(r) for r in db.batch_deliveries(conn, batch_id)]
+
+
+def edit_batch(conn, batch_id: int, batch_no, expiry_date, received=None,
+               changed_by: str = "", reason: str = "", now: datetime | None = None) -> None:
+    """
+    Correct a batch's number, expiry date and (optionally) the quantity received,
+    all in one database transaction. The received quantity can only be changed
+    when the batch came in one delivery; that delivery's entry is corrected
+    (checked and audited like any quantity correction).
+    """
+    batch_no = require_text(batch_no, "Batch number")
+    expiry_date = to_date(expiry_date).isoformat()
+    if received is not None:
+        received = validate_quantity(received)
+    with db.transaction(conn):
+        if received is not None:
+            deliveries = db.batch_deliveries(conn, batch_id)
+            if len(deliveries) != 1:
                 raise ValidationError(
-                    f"Batch '{existing['batch_no']}' already exists for this medicine.")
-        db.update_batch(conn, batch_id, batch_no=batch_no, expiry_date=expiry_date)
+                    f"This batch was received in {len(deliveries)} deliveries. Correct each "
+                    f"delivery's quantity in the log instead.")
+            _edit_quantity(conn, deliveries[0]["id"], received, changed_by, reason, now)
+        _update_batch(conn, batch_id, batch_no, expiry_date)
 
 
 # --------------------------------------------------------------------------
@@ -607,11 +739,12 @@ def medicine_rows(conn) -> list[dict]:
     """Rows for the Medicines table on the Stock & Batches page."""
     rows = []
     for r in db.medicine_summary(conn):
-        stock = int(r["received"]) - int(r["dispensed"])
+        stock = int(r["received"]) - int(r["dispensed"]) - int(r["removed"])
         rows.append({
             "id": r["id"], "name": r["name"], "unit": r["unit"],
             "reorder_level": int(r["reorder_level"]), "note": r["note"],
             "received": int(r["received"]), "dispensed": int(r["dispensed"]),
+            "removed": int(r["removed"]),
             "stock": stock, "status": stock_status(stock, int(r["reorder_level"])),
             "nearest_expiry": r["nearest_expiry"],
         })
@@ -623,11 +756,12 @@ def batch_rows(conn, today: date | None = None) -> list[dict]:
     today = today or date.today()
     rows = []
     for r in db.batch_summary(conn):
-        remaining = int(r["received"]) - int(r["dispensed"])
+        remaining = int(r["received"]) - int(r["dispensed"]) - int(r["removed"])
         rows.append({
             "id": r["id"], "medicine_id": r["medicine_id"], "medicine": r["medicine"],
             "unit": r["unit"], "batch_no": r["batch_no"], "expiry": r["expiry_date"],
             "received": int(r["received"]), "dispensed": int(r["dispensed"]),
+            "removed": int(r["removed"]), "deliveries": int(r["deliveries"]),
             "remaining": remaining,
             "days_to_expiry": days_to_expiry(r["expiry_date"], today),
             "status": batch_status(remaining, r["expiry_date"], today),

@@ -4,7 +4,9 @@ db.py - SQLite storage for MedTracker.
 Design notes
 ------------
 * Current stock is NEVER stored. It is always calculated from the transactions
-  table: total STOCK_IN minus total DISPENSED (per medicine, or per batch).
+  table: total STOCK_IN minus total DISPENSED and REMOVED (per medicine, or per
+  batch). REMOVED is stock taken out without dispensing (expired, recalled...),
+  with the reason in `reason`.
 * Names and batch numbers use COLLATE NOCASE, so "Paracetamol" and
   "paracetamol" are treated as the same medicine. The text is stored exactly
   as first entered (after trimming spaces) for display.
@@ -26,8 +28,30 @@ from pathlib import Path
 
 from config import COMMON_UNITS
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 PRE_LOGIN_ENTERED_BY = "Before sign-in"
+
+TRANSACTIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS transactions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    date          TEXT    NOT NULL,
+    medicine_id   INTEGER NOT NULL REFERENCES medicines(id) ON DELETE RESTRICT,
+    batch_id      INTEGER NOT NULL REFERENCES batches(id) ON DELETE RESTRICT,
+    type          TEXT    NOT NULL CHECK (type IN ('STOCK_IN', 'DISPENSED', 'REMOVED')),
+    quantity      INTEGER NOT NULL CHECK (quantity > 0),
+    patient_id    TEXT    NOT NULL DEFAULT '',
+    prescriber    TEXT    NOT NULL DEFAULT '',
+    balance_after INTEGER NOT NULL,
+    entry_group   TEXT    NOT NULL,
+    entered_at    TEXT    NOT NULL,
+    entered_by    TEXT    NOT NULL DEFAULT '',
+    reason        TEXT    NOT NULL DEFAULT ''     -- why stock was REMOVED
+);
+"""
+
+# Columns copied when the transactions table is rebuilt (version 6 -> 7).
+_V6_TRANSACTION_COLUMNS = ("id, date, medicine_id, batch_id, type, quantity, patient_id, "
+                           "prescriber, balance_after, entry_group, entered_at, entered_by")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS medicines (
@@ -48,20 +72,7 @@ CREATE TABLE IF NOT EXISTS batches (
     UNIQUE (medicine_id, batch_no)
 );
 
-CREATE TABLE IF NOT EXISTS transactions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    date          TEXT    NOT NULL,
-    medicine_id   INTEGER NOT NULL REFERENCES medicines(id) ON DELETE RESTRICT,
-    batch_id      INTEGER NOT NULL REFERENCES batches(id) ON DELETE RESTRICT,
-    type          TEXT    NOT NULL CHECK (type IN ('STOCK_IN', 'DISPENSED')),
-    quantity      INTEGER NOT NULL CHECK (quantity > 0),
-    patient_id    TEXT    NOT NULL DEFAULT '',
-    prescriber    TEXT    NOT NULL DEFAULT '',
-    balance_after INTEGER NOT NULL,
-    entry_group   TEXT    NOT NULL,
-    entered_at    TEXT    NOT NULL,
-    entered_by    TEXT    NOT NULL DEFAULT ''
-);
+""" + TRANSACTIONS_TABLE + """
 
 CREATE TABLE IF NOT EXISTS units (                 -- the choices in every Unit drop-down
     name       TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
@@ -108,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_tx_date     ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_tx_group    ON transactions(entry_group);
 """
 
-# Signed quantity: +quantity for stock in, -quantity for dispensed.
+# Signed quantity: +quantity for stock in, -quantity for dispensed or removed.
 SIGNED_QTY = "CASE t.type WHEN 'STOCK_IN' THEN t.quantity ELSE -t.quantity END"
 
 REQUIRED_TABLES = {"medicines", "batches", "transactions"}
@@ -145,6 +156,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if medicine_columns and "note" not in medicine_columns:
         # Version 4 had no medicine notes.
         conn.execute("ALTER TABLE medicines ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+    _allow_removed_type(conn)
     had_units = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'units'").fetchone()
     conn.executescript(SCHEMA)
@@ -155,6 +167,30 @@ def init_schema(conn: sqlite3.Connection) -> None:
         for row in conn.execute("SELECT DISTINCT unit FROM medicines"):
             add_unit(conn, row["unit"])
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _allow_removed_type(conn: sqlite3.Connection) -> None:
+    """
+    Version 6 only allowed STOCK_IN and DISPENSED rows and had no `reason` column.
+    SQLite can't change a CHECK rule in place, so the table is rebuilt with the
+    same rows (and ids). The indexes are recreated by SCHEMA afterwards.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transactions'").fetchone()
+    if row is None or "'REMOVED'" in row["sql"]:
+        return
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with transaction(conn):
+            conn.execute("DROP TABLE IF EXISTS transactions_new")
+            conn.execute(TRANSACTIONS_TABLE.replace("IF NOT EXISTS transactions",
+                                                    "transactions_new"))
+            conn.execute(f"INSERT INTO transactions_new ({_V6_TRANSACTION_COLUMNS}) "
+                         f"SELECT {_V6_TRANSACTION_COLUMNS} FROM transactions")
+            conn.execute("DROP TABLE transactions")
+            conn.execute("ALTER TABLE transactions_new RENAME TO transactions")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 @contextmanager
@@ -315,16 +351,18 @@ def batch_numbers(conn, medicine_id: int) -> list[str]:
 
 def insert_transaction(conn, *, tx_date: str, medicine_id: int, batch_id: int, tx_type: str,
                        quantity: int, balance_after: int, entry_group: str, entered_at: str,
-                       patient_id: str = "", prescriber: str = "", entered_by: str = "") -> int:
+                       patient_id: str = "", prescriber: str = "", entered_by: str = "",
+                       reason: str = "") -> int:
     cur = conn.execute(
         """
         INSERT INTO transactions
             (date, medicine_id, batch_id, type, quantity, patient_id, prescriber,
-             balance_after, entry_group, entered_at, entered_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             balance_after, entry_group, entered_at, entered_by, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (tx_date, medicine_id, batch_id, tx_type, int(quantity), patient_id.strip(),
-         prescriber.strip(), int(balance_after), entry_group, entered_at, entered_by.strip()),
+         prescriber.strip(), int(balance_after), entry_group, entered_at, entered_by.strip(),
+         reason.strip()),
     )
     return cur.lastrowid
 
@@ -333,7 +371,7 @@ LOG_SELECT = """
     SELECT t.id, t.date, m.name AS medicine, m.unit, t.type, t.quantity,
            b.batch_no, b.expiry_date AS expiry, t.patient_id, t.prescriber,
            t.balance_after, t.entered_at, t.entered_by, t.entry_group, t.medicine_id,
-           t.batch_id
+           t.batch_id, t.reason
     FROM transactions t
     JOIN medicines m ON m.id = t.medicine_id
     JOIN batches   b ON b.id = t.batch_id
@@ -375,6 +413,13 @@ def delete_entry_group(conn, entry_group: str) -> int:
 
 def get_transaction(conn, tx_id: int):
     return conn.execute(LOG_SELECT + " WHERE t.id = ?", (tx_id,)).fetchone()
+
+
+def batch_deliveries(conn, batch_id: int):
+    """The STOCK_IN rows of one batch, oldest first."""
+    return conn.execute(
+        LOG_SELECT + " WHERE t.batch_id = ? AND t.type = 'STOCK_IN' ORDER BY t.id", (batch_id,)
+    ).fetchall()
 
 
 def batch_movements(conn, batch_id: int):
@@ -471,6 +516,8 @@ def medicine_summary(conn):
                          WHERE medicine_id = m.id AND type = 'STOCK_IN'), 0) AS received,
                COALESCE((SELECT SUM(quantity) FROM transactions
                          WHERE medicine_id = m.id AND type = 'DISPENSED'), 0) AS dispensed,
+               COALESCE((SELECT SUM(quantity) FROM transactions
+                         WHERE medicine_id = m.id AND type = 'REMOVED'), 0) AS removed,
                (SELECT MIN(expiry_date) FROM batch_left
                 WHERE medicine_id = m.id AND remaining > 0) AS nearest_expiry
         FROM medicines m
@@ -485,7 +532,9 @@ def batch_summary(conn):
         """
         SELECT b.id, b.medicine_id, m.name AS medicine, m.unit, b.batch_no, b.expiry_date,
                COALESCE(SUM(CASE WHEN t.type = 'STOCK_IN'  THEN t.quantity END), 0) AS received,
-               COALESCE(SUM(CASE WHEN t.type = 'DISPENSED' THEN t.quantity END), 0) AS dispensed
+               COALESCE(SUM(CASE WHEN t.type = 'DISPENSED' THEN t.quantity END), 0) AS dispensed,
+               COALESCE(SUM(CASE WHEN t.type = 'REMOVED'   THEN t.quantity END), 0) AS removed,
+               COUNT(CASE WHEN t.type = 'STOCK_IN' THEN 1 END) AS deliveries
         FROM batches b
         JOIN medicines m ON m.id = b.medicine_id
         LEFT JOIN transactions t ON t.batch_id = b.id

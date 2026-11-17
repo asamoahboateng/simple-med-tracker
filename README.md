@@ -5,10 +5,10 @@ It runs on Windows, macOS and Linux, works fully offline, and keeps its data in 
 local SQLite database file.
 
 - **Dashboard**: summary figures; what needs attention (out of stock, expiring, expired); an expiry shelf showing every batch by the month it expires; running low, stock health and this month's dispensing
-- **Add Stock** / **Record Dispensed**: data-entry dialogs. Dispensing takes stock from the batch that expires first (FEFO) automatically.
+- **Add Stock** / **Record Dispensed** / **Remove Stock**: data-entry dialogs. Dispensing takes stock from the batch that expires first (FEFO) automatically.
 - **Search** (Ctrl+F): find a medicine by name or note and see its details, batches and full log
 - **Audit Log**: who edited, deleted or undid which entry, when, and why
-- **Dispensing Log**: every entry, with filters, undo, and Excel/CSV export
+- **Dispensing Log**: every entry (stock in, dispensed, removed), with filters, undo, and Excel/CSV export
 - **Stock & Batches**: current stock per medicine and per batch, colour-coded
 - **Reports**: a month or any date range (quick picks for the last 7, 30 or 90 days), compared with the period before; a day-by-day calendar, top 10 medicines, pace, busiest weekdays and hours, prescriber share, days of stock left and a ranked table, with Excel and PDF export
 - **File menu**: back up and restore the database, open the data folder, change password, sign out
@@ -38,7 +38,7 @@ local SQLite database file.
 | `.github/workflows/build.yml` | Builds on GitHub when you push a version tag (Windows; add macOS/Linux via the tag message). |
 
 **Stock is never stored as a number you can edit.** MedTracker works it out every time
-from the log: *stock received − stock dispensed*. It does the same for each batch.
+from the log: *stock received − stock dispensed − stock removed*. It does the same for each batch.
 When a dispensing entry is split across several batches, the rows are saved together
 in one database transaction, and **Undo last entry** removes them together.
 
@@ -324,7 +324,15 @@ When you release a new version, update `APP_VERSION` in `config.py`, then push a
 - **Audit Log**: every quantity correction, delete and undo is recorded automatically with who
   did it, when, the optional **Reason** typed in the pop-up, and a full copy of the entry (so
   deleted entries can still be read). The audit log can be filtered and exported, but not changed. A change that would make a batch go below zero is blocked.
-- **Stock & Batches**: double-click a medicine's **name**, **Unit**, **Reorder level** or **Note**, or a batch's **Batch No** or **Expiry**, to change them.
+- **Remove Stock** (Ctrl+R, or **Remove stock** in the sidebar): for expired, recalled, damaged or
+  lost stock. Choose the medicine and a reason. The batch is optional: pick one from the list
+  (expired batches are included and marked) and its whole remaining quantity is filled in, or leave
+  it on *Automatic*, which takes from the earliest expiry first. Removals show as **REMOVED** in the
+  log with their reason, count against stock, and are not counted as dispensing in reports.
+- **Stock & Batches**: double-click a medicine's **name**, **Unit**, **Reorder level** or **Note** to
+  change it. Double-click a batch to open **Edit Batch** (also on the Search page), where you can
+  correct its number, expiry and the quantity received. The quantity received can only be changed
+  there when the batch came in one delivery; otherwise correct each delivery in the log.
   Other values are calculated and can't be edited.
 - **Colours**: **View → Colour theme** switches between Bottle green, Navy, Ocean blue, Teal,
   Plum and Charcoal. The change applies at once and is remembered on that computer. Red, amber

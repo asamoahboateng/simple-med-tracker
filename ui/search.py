@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 
 import logic
 from ui import theme
+from ui.edit_batch import EditBatchDialog
 from ui.edit_entry import DeleteEntryDialog, EditEntryDialog
 from ui.log import LOG_COLUMNS
 from ui.models import STATUS_COLOURS, Column, RecordTableModel, TableProxy, int_fmt, make_table, use_pills
@@ -99,9 +100,10 @@ class SearchPage(QWidget):
         self.stock_card = SummaryCard("Current stock", theme.PRIMARY)
         self.received_card = SummaryCard("Total received", theme.GREEN)
         self.dispensed_card = SummaryCard("Total dispensed", theme.BLUE)
+        self.removed_card = SummaryCard("Total removed", theme.PURPLE)
         self.expiry_card = SummaryCard("Nearest expiry", theme.AMBER)
         tiles = FlowGrid([self.stock_card, self.received_card, self.dispensed_card,
-                          self.expiry_card], min_item_width=160)
+                          self.removed_card, self.expiry_card], min_item_width=150)
 
         self.log_model = RecordTableModel(DETAIL_LOG_COLUMNS)
         self.log_view = make_table(self.log_model, TableProxy())
@@ -121,7 +123,11 @@ class SearchPage(QWidget):
         self.batch_view = make_table(self.batch_model, TableProxy())
         self.batch_view.setEditTriggers(self.batch_view.EditTrigger.NoEditTriggers)
         use_pills(self.batch_view, DETAIL_BATCH_COLUMNS, "status")
+        self.batch_view.doubleClicked.connect(self._edit_batch)
         self.batch_card = Card("Batches")
+        batch_hint = hint_label("   Double-click a batch to edit its number, expiry or quantity received")
+        batch_hint.setWordWrap(False)
+        self.batch_card.header.insertWidget(1, batch_hint)
         self.batch_card.body.addWidget(self.batch_view)
 
         tables = QSplitter(Qt.Vertical)
@@ -185,6 +191,7 @@ class SearchPage(QWidget):
         self.stock_card.set_value(med["stock"], unit)
         self.received_card.set_value(med["received"], unit)
         self.dispensed_card.set_value(med["dispensed"], unit)
+        self.removed_card.set_value(med["removed"], unit)
         self.expiry_card.set_value(med["nearest_expiry"] or "-",
                                    "" if med["nearest_expiry"] else "No stock left")
 
@@ -205,6 +212,12 @@ class SearchPage(QWidget):
         row = self.log_model.row_dict(self.log_view.model().mapToSource(index).row())
         if DeleteEntryDialog(self.conn, row, self, changed_by=self.user_name).exec():
             show_info(self, "The entry was deleted.", title="Deleted")
+            self.data_changed.emit()
+
+    def _edit_batch(self, index):
+        row = self.batch_model.row_dict(self.batch_view.model().mapToSource(index).row())
+        if EditBatchDialog(self.conn, row, self, changed_by=self.user_name).exec():
+            show_info(self, "The batch was updated.", title="Saved")
             self.data_changed.emit()
 
     def _edit_entry(self, index):

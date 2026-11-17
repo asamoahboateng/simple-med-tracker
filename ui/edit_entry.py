@@ -16,12 +16,14 @@ def entry_details(row: dict) -> QFormLayout:
     """Read-only form describing one log row."""
     form = QFormLayout()
     form.addRow("Medicine:", QLabel(row["medicine"]))
-    form.addRow("Type:", QLabel("Stock in" if row["type"] == logic.STOCK_IN else "Dispensed"))
+    form.addRow("Type:", QLabel(logic.TYPE_NAMES[row["type"]]))
     form.addRow("Date:", QLabel(row["date"]))
     form.addRow("Batch:", QLabel(f"{row['batch_no']}  (expires {row['expiry']})"))
     if row["type"] == logic.DISPENSED:
         form.addRow("Patient ID:", QLabel(row["patient_id"] or "-"))
         form.addRow("Prescriber:", QLabel(row["prescriber"] or "-"))
+    if row["type"] == logic.REMOVED:
+        form.addRow("Reason removed:", QLabel(row["reason"] or "-"))
     form.addRow("Entered:", QLabel(f"{row['entered_at']} by {row['entered_by'] or '-'}"))
     form.addRow("Recorded quantity:", QLabel(f"{int(row['quantity']):,} {row['unit']}"))
     return form

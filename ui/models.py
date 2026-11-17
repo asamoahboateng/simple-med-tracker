@@ -26,6 +26,7 @@ AMBER = ("#fdefd3", "#8a5300")
 RED = ("#fbdcdc", "#9b1c1c")
 GREY = ("#eceff4", "#5b6778")
 BLUE = ("#e2eafb", "#24479e")
+PURPLE = ("#ece6fb", "#5b3fb8")
 
 STATUS_COLOURS = {
     logic.STATUS_OK: GREEN,
@@ -36,6 +37,7 @@ STATUS_COLOURS = {
     logic.BATCH_USED_UP: GREY,
     logic.STOCK_IN: GREEN,
     logic.DISPENSED: BLUE,
+    logic.REMOVED: PURPLE,
     logic.AUDIT_EDITED: AMBER,
     logic.AUDIT_DELETED: RED,
     logic.AUDIT_UNDONE: GREY,

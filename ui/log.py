@@ -1,4 +1,5 @@
-"""ui/log.py - Dispensing Log: every transaction, with filters, quantity edits, undo and export."""
+"""ui/log.py - Dispensing Log: every transaction (stock in, dispensed, removed), with filters,
+quantity edits, deletes, undo and export."""
 
 from datetime import date
 
@@ -13,8 +14,8 @@ from ui.edit_entry import DeleteEntryDialog, EditEntryDialog
 from ui.models import Column, RecordTableModel, TableProxy, int_fmt, make_table, use_pills
 from ui.responsive import FlowLayout
 from ui.widgets import (
-    Card, ask_yes_no, hint_label, make_button, make_date_edit, page_header, page_layout,
-    show_error, show_info, to_py_date,
+    Card, SearchComboBox, ask_yes_no, hint_label, make_button, make_date_edit, page_header,
+    page_layout, show_error, show_info, to_py_date,
 )
 
 LOG_COLUMNS = [
@@ -26,6 +27,7 @@ LOG_COLUMNS = [
     Column("expiry", "Expiry"),
     Column("patient_id", "Patient ID"),
     Column("prescriber", "Prescriber"),
+    Column("reason", "Reason removed"),
     Column("balance_after", "Balance After", "right", int_fmt),
     Column("entered_at", "Entered At"),
     Column("entered_by", "Entered By"),
@@ -53,14 +55,17 @@ class LogPage(QWidget):
         first_of_month = date.today().replace(day=1)
         self.from_date = make_date_edit(first_of_month)
         self.to_date = make_date_edit()
-        self.medicine_filter = QComboBox()
-        self.medicine_filter.setMinimumWidth(180)
+        # Type to search: the list narrows to medicines containing the text, and the log
+        # shows every medicine whose name contains it (empty = all medicines).
+        self.medicine_filter = SearchComboBox("All medicines (type to search)")
+        self.medicine_filter.setMinimumWidth(240)
         self.type_filter = QComboBox()
         self.type_filter.addItem("All types", None)
         self.type_filter.addItem("Stock in", logic.STOCK_IN)
         self.type_filter.addItem("Dispensed", logic.DISPENSED)
+        self.type_filter.addItem("Removed", logic.REMOVED)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("\U0001F50D  Search patient ID or prescriber")
+        self.search.setPlaceholderText("\U0001F50D  Search patient ID, prescriber or reason")
         self.search.setClearButtonEnabled(True)
         clear_btn = make_button("Clear")
 
@@ -107,7 +112,7 @@ class LogPage(QWidget):
         layout.addLayout(actions)
 
         for widget_signal in (self.use_dates.toggled, self.from_date.dateChanged,
-                              self.to_date.dateChanged, self.medicine_filter.currentIndexChanged,
+                              self.to_date.dateChanged, self.medicine_filter.editTextChanged,
                               self.type_filter.currentIndexChanged, self.search.textChanged):
             widget_signal.connect(self._apply_filters)
         self.use_dates.toggled.connect(self._update_date_enabled)
@@ -122,15 +127,8 @@ class LogPage(QWidget):
     # --- data ---------------------------------------------------------------
     def refresh(self):
         self.model.set_rows(logic.log_rows(self.conn))
-        chosen = self.medicine_filter.currentData()
-        self.medicine_filter.blockSignals(True)
-        self.medicine_filter.clear()
-        self.medicine_filter.addItem("All medicines", None)
-        for name in sorted({r["medicine"] for r in self.model.rows}, key=str.casefold):
-            self.medicine_filter.addItem(name, name)
-        index = self.medicine_filter.findData(chosen)
-        self.medicine_filter.setCurrentIndex(max(index, 0))
-        self.medicine_filter.blockSignals(False)
+        self.medicine_filter.set_items(
+            sorted({r["medicine"] for r in self.model.rows}, key=str.casefold))
         self._apply_filters()
 
     # --- filtering ----------------------------------------------------------
@@ -144,15 +142,15 @@ class LogPage(QWidget):
             end = to_py_date(self.to_date.date()).isoformat()
             if not (start <= row["date"] <= end):
                 return False
-        medicine = self.medicine_filter.currentData()
-        if medicine and row["medicine"] != medicine:
+        medicine = self.medicine_filter.text().casefold()
+        if medicine and medicine not in row["medicine"].casefold():
             return False
         tx_type = self.type_filter.currentData()
         if tx_type and row["type"] != tx_type:
             return False
         text = self.search.text().strip().casefold()
-        if text and text not in row["patient_id"].casefold() \
-                and text not in row["prescriber"].casefold():
+        if text and not any(text in row[key].casefold()
+                            for key in ("patient_id", "prescriber", "reason")):
             return False
         return True
 
@@ -163,7 +161,7 @@ class LogPage(QWidget):
 
     def _clear_filters(self):
         self.use_dates.setChecked(False)
-        self.medicine_filter.setCurrentIndex(0)
+        self.medicine_filter.setEditText("")
         self.type_filter.setCurrentIndex(0)
         self.search.clear()
 
@@ -203,7 +201,8 @@ class LogPage(QWidget):
             f"  - {r['type']}: {r['quantity']:,} {r['unit']} of {r['medicine']}, "
             f"batch {r['batch_no']}" for r in rows)
         extra = (f"\nPatient: {first['patient_id'] or '-'}   Prescriber: {first['prescriber'] or '-'}"
-                 if first["type"] == logic.DISPENSED else "")
+                 if first["type"] == logic.DISPENSED
+                 else f"\nReason: {first['reason']}" if first["type"] == logic.REMOVED else "")
         if not ask_yes_no(
                 self,
                 f"The most recent entry (saved {first['entered_at']}, dated {first['date']}):\n\n"

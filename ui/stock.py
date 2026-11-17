@@ -2,16 +2,16 @@
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QLineEdit, QSplitter, QStyledItemDelegate, QWidget,
+    QCheckBox, QComboBox, QLineEdit, QSplitter, QWidget,
 )
 
 import logic
+from ui.edit_batch import EditBatchDialog
 from ui.models import (
     STATUS_COLOURS, Column, RecordTableModel, TableProxy, int_fmt, make_table, use_pills,
 )
 from ui.widgets import (
-    Card, hint_label, make_button, make_date_edit, page_header, page_layout, show_error,
-    to_py_date, to_qdate,
+    Card, hint_label, make_button, page_header, page_layout, show_error,
 )
 
 MEDICINE_COLUMNS = [
@@ -20,6 +20,7 @@ MEDICINE_COLUMNS = [
     Column("reorder_level", "Reorder level", "right", int_fmt, editable=True),
     Column("received", "Total received", "right", int_fmt),
     Column("dispensed", "Total dispensed", "right", int_fmt),
+    Column("removed", "Total removed", "right", int_fmt),
     Column("stock", "Current stock", "right", int_fmt),
     Column("status", "Status", "center"),
     Column("nearest_expiry", "Nearest expiry"),
@@ -28,10 +29,11 @@ MEDICINE_COLUMNS = [
 
 BATCH_COLUMNS = [
     Column("medicine", "Medicine"),
-    Column("batch_no", "Batch No", editable=True),
-    Column("expiry", "Expiry", editable=True),
+    Column("batch_no", "Batch No"),
+    Column("expiry", "Expiry"),
     Column("received", "Received", "right", int_fmt),
     Column("dispensed", "Dispensed", "right", int_fmt),
+    Column("removed", "Removed", "right", int_fmt),
     Column("remaining", "Remaining", "right", int_fmt),
     Column("days_to_expiry", "Days to expiry", "right"),
     Column("status", "Status", "center"),
@@ -59,29 +61,15 @@ def _search_box(placeholder: str, proxy: TableProxy) -> QLineEdit:
     return box
 
 
-class DateDelegate(QStyledItemDelegate):
-    """Edits an ISO 'YYYY-MM-DD' cell with a calendar date field."""
-
-    def createEditor(self, parent, option, index):
-        editor = make_date_edit()
-        editor.setParent(parent)
-        return editor
-
-    def setEditorData(self, editor, index):
-        editor.setDate(to_qdate(logic.to_date(index.data(Qt.EditRole))))
-
-    def setModelData(self, editor, model, index):
-        model.setData(index, to_py_date(editor.date()).isoformat(), Qt.EditRole)
-
-
 class StockPage(QWidget):
     data_changed = Signal()
     new_medicine_requested = Signal()
     units_requested = Signal()
 
-    def __init__(self, conn, parent=None):
+    def __init__(self, conn, parent=None, user_name: str = ""):
         super().__init__(parent)
         self.conn = conn
+        self.user_name = user_name   # recorded in the audit log if a batch's quantity changes
 
         # --- medicines ---
         self.med_model = RecordTableModel(MEDICINE_COLUMNS)
@@ -101,7 +89,6 @@ class StockPage(QWidget):
         # --- batches ---
         self.batch_model = RecordTableModel(BATCH_COLUMNS)
         self.batch_model.colour_fn = self._batch_colour
-        self.batch_model.edit_fn = self._save_batch_edit
         self.batch_proxy = TableProxy()
         self.hide_used = QCheckBox("Hide used-up batches")
         self.hide_used.setChecked(True)
@@ -115,11 +102,10 @@ class StockPage(QWidget):
         self.batch_view = make_table(self.batch_model, self.batch_proxy)
         self.batch_view.sortByColumn(2, Qt.AscendingOrder)
         use_pills(self.batch_view, BATCH_COLUMNS, "status")
-        self.batch_view.setItemDelegateForColumn(
-            [c.key for c in BATCH_COLUMNS].index("expiry"), DateDelegate(self.batch_view))
+        self.batch_view.doubleClicked.connect(self._edit_batch)
 
         batch_card = Card("Batches")
-        batch_hint = hint_label("   Double-click Batch No or Expiry to edit")
+        batch_hint = hint_label("   Double-click a batch to edit it")
         batch_hint.setWordWrap(False)
         batch_card.header.insertWidget(1, batch_hint)
         batch_card.header.addWidget(self.hide_used)
@@ -141,7 +127,7 @@ class StockPage(QWidget):
         units_btn.clicked.connect(self.units_requested.emit)
         layout = page_layout(self)
         layout.addWidget(page_header(
-            "Stock & Batches", "Stock levels are calculated from the log (received \u2212 dispensed)",
+            "Stock & Batches", "Stock levels are calculated from the log (received \u2212 dispensed \u2212 removed)",
             units_btn, new_btn))
         layout.addWidget(splitter, 1)
 
@@ -183,17 +169,8 @@ class StockPage(QWidget):
         QTimer.singleShot(0, self.data_changed.emit)
         return True
 
-    def _save_batch_edit(self, row: dict, key: str, value) -> bool:
-        """Called when the user edits Batch No or Expiry in the table."""
-        try:
-            if key == "batch_no":
-                logic.update_batch(self.conn, row["id"], batch_no=value)
-            elif key == "expiry":
-                logic.update_batch(self.conn, row["id"], expiry_date=value)
-            else:
-                return False
-        except logic.ValidationError as exc:
-            show_error(self, str(exc))
-            return False
-        QTimer.singleShot(0, self.data_changed.emit)
-        return True
+    def _edit_batch(self, index):
+        """Double-clicking a batch opens the Edit Batch pop-up."""
+        row = self.batch_model.row_dict(self.batch_proxy.mapToSource(index).row())
+        if EditBatchDialog(self.conn, row, self, changed_by=self.user_name).exec():
+            self.data_changed.emit()

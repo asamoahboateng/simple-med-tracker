@@ -19,6 +19,7 @@ from ui.dashboard import DashboardPage
 from ui.dispense import DispenseDialog
 from ui.log import LogPage
 from ui.medicine import NewMedicineDialog
+from ui.remove_stock import RemoveStockDialog
 from ui.report import ReportPage
 from ui.search import SearchPage
 from ui import icons, theme
@@ -52,7 +53,7 @@ class MainWindow(QMainWindow):
         self.search_page = SearchPage(conn, user_name=user.display_name)
         self.log_page = LogPage(conn, user_name=user.display_name)
         self.audit_page = AuditPage(conn)
-        self.stock_page = StockPage(conn)
+        self.stock_page = StockPage(conn, user_name=user.display_name)
         self.report_page = ReportPage(conn)
         self.pages = [
             ("Dashboard", "dashboard", self.dashboard),
@@ -157,6 +158,7 @@ class MainWindow(QMainWindow):
         self.wide_only.append(caption)
         for text, icon_name, slot in (("Add stock", "plus", self.open_add_stock),
                                       ("Record dispensed", "tablet", self.open_dispense),
+                                      ("Remove stock", "remove", self.open_remove_stock),
                                       ("New medicine", "bottle", self.open_new_medicine)):
             button = QPushButton(icons.icon(icon_name, "#ffffff", size=18), f"  {text}")
             button.setIconSize(QSize(18, 18))
@@ -265,6 +267,11 @@ class MainWindow(QMainWindow):
         self.search_page.search.setFocus()
         self.search_page.search.selectAll()
 
+    def open_remove_stock(self):
+        if self.check_access() and RemoveStockDialog(
+                self.conn, self, entered_by=self.user.display_name).exec():
+            self.data_changed()
+
     def open_units(self):
         if self.check_access():
             UnitsDialog(self.conn, self).exec()
@@ -371,6 +378,7 @@ class MainWindow(QMainWindow):
         self._action(entries, "New Medicine...", self.open_new_medicine, "Ctrl+M")
         self._action(entries, "Add Stock...", self.open_add_stock, "Ctrl+N")
         self._action(entries, "Record Dispensed...", self.open_dispense, "Ctrl+D")
+        self._action(entries, "Remove Stock...", self.open_remove_stock, "Ctrl+R")
         entries.addSeparator()
         self._action(entries, "Units...", self.open_units)
 

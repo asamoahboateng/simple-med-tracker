@@ -15,7 +15,7 @@ from pathlib import Path
 from platformdirs import user_data_dir
 
 APP_NAME = "MedTracker"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 APP_DESCRIPTION = "Medicine inventory and dispensing tracker for small pharmacies and clinics."
 
 # Batches expiring within this many days are flagged as "Expiring soon".
