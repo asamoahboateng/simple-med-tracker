@@ -24,6 +24,8 @@ from ui.report import ReportPage
 from ui.search import SearchPage
 from ui import icons, theme
 from ui.stock import StockPage
+from ui import update_flow
+from ui.update_flow import UpdateController
 from ui.units import UnitsDialog
 from ui.users import PasswordDialog, UsersPage
 from ui.widgets import ask_yes_no, show_error, show_info
@@ -79,7 +81,15 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_sidebar())
-        layout.addWidget(self.stack, 1)
+        # right side: the "update available" bar above the pages
+        self.updates = UpdateController(self)
+        right = QWidget()
+        right_col = QVBoxLayout(right)
+        right_col.setContentsMargins(0, 0, 0, 0)
+        right_col.setSpacing(0)
+        right_col.addWidget(self.updates.bar)
+        right_col.addWidget(self.stack, 1)
+        layout.addWidget(right, 1)
         self.setCentralWidget(central)
 
         # --- wiring ---
@@ -98,6 +108,8 @@ class MainWindow(QMainWindow):
 
         self.sidebar.setCurrentRow(0)
         self._update_users_label()
+        self.updates.announce_if_updated()
+        self.updates.start_auto_check()
 
     def _build_sidebar(self) -> QWidget:
         """Dark navigation panel: logo, page list, quick actions, version."""
@@ -396,8 +408,17 @@ class MainWindow(QMainWindow):
             colours.addAction(action)
 
         help_menu = bar.addMenu("&Help")
+        self._action(help_menu, "Check for updates...", self.updates.check_now)
+        self._action(help_menu, "Install update from file...", self.updates.install_from_file)
+        auto = self._action(help_menu, "Check for updates automatically", self._toggle_auto_check)
+        auto.setCheckable(True)
+        auto.setChecked(update_flow.auto_check_enabled())
+        help_menu.addSeparator()
         about = self._action(help_menu, f"About {config.APP_NAME}", self.show_about)
         about.setMenuRole(QAction.AboutRole)
+
+    def _toggle_auto_check(self, checked: bool):
+        update_flow.set_auto_check(checked)
 
     def backup_database(self):
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
@@ -422,6 +443,10 @@ class MainWindow(QMainWindow):
             return
         if Path(path).resolve() == self.db_path.resolve():
             show_error(self, "That is the database currently in use. Choose a backup file.")
+            return
+        newer = db.backup_version(path)
+        if newer > db.SCHEMA_VERSION:
+            show_error(self, str(db.NewerDatabaseError(newer)), title="Cannot restore")
             return
         if not db.is_valid_backup(path):
             show_error(self, "This file is not a valid MedTracker backup.", title="Cannot restore")
@@ -457,5 +482,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         super().closeEvent(event)
         if not self.signing_out:      # closing the window quits the app
+            self.updates.run_pending_install()
             self.conn.close()
             QApplication.quit()

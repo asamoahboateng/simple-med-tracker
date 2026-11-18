@@ -91,6 +91,10 @@ def main(argv=None) -> int:
              config.APP_NAME, config.APP_VERSION, args.demo, path)
     try:
         conn = db.connect(path)
+    except db.NewerDatabaseError as exc:
+        log.error("Database is newer than this version: %s", exc)
+        QMessageBox.critical(None, "Newer data found", str(exc))
+        return 1
     except Exception as exc:
         log.exception("Could not open database")
         QMessageBox.critical(None, "Cannot open database",

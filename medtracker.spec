@@ -6,7 +6,8 @@ Run from the project folder with the .venv active:
     pyinstaller medtracker.spec --noconfirm --clean
 
 Output:
-    Windows : dist/MedTracker.exe          (one single file)
+    Windows : dist/MedTracker/MedTracker.exe  (folder; installer/medtracker.iss packs it
+                                               into MedTracker-Setup-<version>.exe)
     macOS   : dist/MedTracker.app          (application bundle)
     Linux   : dist/MedTracker/MedTracker   (folder with the program inside)
 
@@ -57,41 +58,31 @@ a.datas = [d for d in a.datas if "Qt/translations" not in d[0].replace("\\", "/"
 
 pyz = PYZ(a.pure)
 
-if IS_WINDOWS:
-    # Windows: one single .exe file, no console window.
-    exe = EXE(
-        pyz, a.scripts, a.binaries, a.datas, [],
-        name=APP_NAME,
-        icon=ICON,
-        console=False,
-        upx=False,
-        runtime_tmpdir=None,
-    )
-else:
-    # macOS / Linux: a folder build (starts faster, and is required for a .app).
-    exe = EXE(
-        pyz, a.scripts, [],
-        exclude_binaries=True,
-        name=APP_NAME,
-        icon=ICON,
-        console=False,
-        upx=False,
-    )
-    coll = COLLECT(exe, a.binaries, a.datas, name=APP_NAME, upx=False)
+# All platforms: a folder build (starts faster, is required for a .app, and on Windows
+# is what the Inno Setup installer packages so the app can update itself).
+exe = EXE(
+    pyz, a.scripts, [],
+    exclude_binaries=True,
+    name=APP_NAME,
+    icon=ICON,
+    console=False,
+    upx=False,
+)
+coll = COLLECT(exe, a.binaries, a.datas, name=APP_NAME, upx=False)
 
-    if IS_MAC:
-        app = BUNDLE(
-            coll,
-            name=f"{APP_NAME}.app",
-            icon=ICON,
-            bundle_identifier="org.medtracker.app",
-            version=APP_VERSION,
-            info_plist={
-                "CFBundleName": APP_NAME,
-                "CFBundleDisplayName": APP_NAME,
-                "CFBundleShortVersionString": APP_VERSION,
-                "CFBundleVersion": APP_VERSION,
-                "NSHighResolutionCapable": True,
-                "NSRequiresAquaSystemAppearance": False,
-            },
-        )
+if IS_MAC:
+    app = BUNDLE(
+        coll,
+        name=f"{APP_NAME}.app",
+        icon=ICON,
+        bundle_identifier="org.medtracker.app",
+        version=APP_VERSION,
+        info_plist={
+            "CFBundleName": APP_NAME,
+            "CFBundleDisplayName": APP_NAME,
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": APP_VERSION,
+            "NSHighResolutionCapable": True,
+            "NSRequiresAquaSystemAppearance": False,
+        },
+    )

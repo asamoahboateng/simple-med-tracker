@@ -32,7 +32,10 @@ local SQLite database file.
 | `tests/` | pytest tests. |
 | `medtracker.spec` | PyInstaller build recipe. |
 | `setup.bat` / `setup.sh` | One-step setup: create `.venv` and install everything. |
-| `build.bat` / `build.sh` | One-step build: run the tests, build the app and package it (`.exe` on Windows; `.app`, `.dmg` and `.zip` on macOS). |
+| `build.bat` / `build.sh` | One-step build: run the tests, build the app and package it (program folder, plus an installer if Inno Setup is installed, on Windows; `.app`, `.dmg` and `.zip` on macOS). |
+| `updater.py`, `ui/update_bar.py`, `ui/update_flow.py` | Update checking, downloading and installing (see **Updates** below). |
+| `installer/medtracker.iss` | Inno Setup script that builds the Windows installer. |
+| `scripts/make_manifest.py` | Writes `latest.json`, the file installed copies read to find updates. |
 | `build-linux.sh` / `build-all.sh` | From a Mac: build the Linux version with Docker / build everything this Mac can build. |
 | `run.bat` / `run.sh` | Start the app with the `.venv` Python. No activation needed. |
 | `.github/workflows/build.yml` | Builds on GitHub when you push a version tag (Windows; add macOS/Linux via the tag message). |
@@ -171,7 +174,7 @@ machine for you, for free.
 
 | System | Run | You get (in the `dist` folder) |
 |---|---|---|
-| Windows | double-click **`build.bat`** | `MedTracker.exe` and `MedTracker-<version>-Windows.exe` |
+| Windows | double-click **`build.bat`** | the `MedTracker\` folder (with `MedTracker.exe` inside) and, if [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed, `MedTracker-Setup-<version>.exe` |
 | macOS | `./build.sh` | `MedTracker.app`, `MedTracker-<version>-macOS-arm64.dmg` (drag-to-Applications installer) and a `.zip` |
 | Linux | `./build.sh` | `MedTracker/` folder and `MedTracker-<version>-Linux.zip` |
 
@@ -184,7 +187,7 @@ pyinstaller medtracker.spec --noconfirm --clean
 
 | System | Output | How to run it |
 |---|---|---|
-| Windows | `dist\MedTracker.exe` | A single file. Double-click it, or copy it anywhere. |
+| Windows | `dist\MedTracker\MedTracker.exe` | A folder. Keep the whole folder together. The installer (built with Inno Setup from this folder) is what you give to users. |
 | macOS | `dist/MedTracker.app` | Drag it to Applications. |
 | Linux | `dist/MedTracker/` (folder) | Run `dist/MedTracker/MedTracker`. Keep the whole folder together. |
 
@@ -252,7 +255,8 @@ repositories, and private repositories get free monthly build minutes.
    Each machine runs the tests first, then builds.
 4. When it finishes, go to **Releases** (on the right of the repository's main page). Download
    (only the platforms you built are there):
-   - `MedTracker-Windows.exe` for Windows 10/11
+   - `MedTracker-Setup-<version>.exe` for Windows 10/11 (the installer; installed copies update themselves),
+     `MedTracker-Windows-portable.zip` (no installer, no auto-update) and `latest.json` (read by the updater)
    - `MedTracker-macOS-AppleSilicon.dmg` / `.zip` for Macs with an M1 or newer chip
    - `MedTracker-macOS-Intel.dmg` / `.zip` for Intel Macs
    - `MedTracker-Linux-x86_64.zip` for Linux
@@ -262,6 +266,57 @@ checkboxes to also build macOS and Linux. A manual run attaches the builds to th
 instead of creating a release.
 
 When you release a new version, update `APP_VERSION` in `config.py`, then push a new tag such as `v1.0.1`.
+
+---
+
+## Updates
+
+### For users (Windows)
+
+MedTracker checks for a newer version in the background about 10 seconds after it opens, at most
+once a day. If one is found, a bar appears at the top of the window:
+**MedTracker 1.2.0 is available.**
+
+- **What's new**: shows what changed.
+- **Install now**: MedTracker backs up your data, closes, installs the new version and reopens.
+- **Install when I close**: downloads the update now and installs it when you next close MedTracker.
+- **Later**: hides the bar until the next check.
+
+Before every update your data is copied to the `backups` folder (**File → Open data folder**) as
+`before-update-<old version>-<date>_<time>.db`. Updating never deletes or changes your data, and an
+older MedTracker refuses to open data saved by a newer one rather than damaging it.
+
+**Help menu**
+- **Check for updates...** checks right now and tells you the result.
+- **Install update from file...** is for a PC without internet: on another computer download
+  `latest.json` and `MedTracker-Setup-<version>.exe` from the Releases page, put both in the same
+  folder (for example on a USB stick), then choose `latest.json`. MedTracker checks the installer
+  is intact before using it.
+- **Check for updates automatically** turns the background check on or off (on by default).
+
+If MedTracker runs from source, or on a Mac or Linux, it tells you a new version exists and the
+**Download** button opens the Releases page instead of installing.
+
+### For the maintainer
+
+1. Set `APP_VERSION` in `config.py`, commit, then tag it with the same number and push the tag:
+   `git tag -a v1.2.0 -m "What changed (shown as the release notes)"` and `git push origin v1.2.0`.
+   The workflow refuses to publish if the tag and `APP_VERSION` differ.
+2. GitHub builds the Windows folder, packs it with Inno Setup into `MedTracker-Setup-1.2.0.exe`, writes
+   `latest.json` (version, download link, SHA-256, size, release notes) and attaches the installer,
+   `latest.json` and `MedTracker-Windows-portable.zip` to the Release.
+3. Installed copies find the update through
+   `https://github.com/asamoahboateng/simple-med-tracker/releases/latest/download/latest.json`.
+   GitHub's "latest" ignores **pre-releases** and drafts, so to test the whole thing first, publish
+   a pre-release: it can be installed with **Install update from file...**, and normal users do not
+   see it. Only make it a normal release when you're happy.
+4. The first move to 1.2.0 must be done by hand once on each PC (versions before 1.2.0 are a single
+   `.exe` that cannot update itself, and `latest.json` says `min_version` 1.2.0): run the installer.
+   It installs for the current user only, to `%LOCALAPPDATA%\Programs\MedTracker`, with no
+   administrator rights, and keeps the data in `%APPDATA%\MedTracker`. After that, updates are automatic.
+   The old single `.exe` can be deleted.
+5. The installer is not code-signed, so Windows SmartScreen may warn the first time. Downloads are
+   checked against the SHA-256 in `latest.json` and may only come from GitHub hosts.
 
 ---
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from platformdirs import user_data_dir
 
 APP_NAME = "MedTracker"
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.2.0"
 APP_DESCRIPTION = "Medicine inventory and dispensing tracker for small pharmacies and clinics."
 
 # Batches expiring within this many days are flagged as "Expiring soon".
@@ -25,6 +25,17 @@ EXPIRY_WARNING_DAYS = 90
 DB_FILENAME = "medtracker.db"
 DEMO_DB_FILENAME = "medtracker_demo.db"
 LOG_FILENAME = "medtracker.log"
+
+# --- Updates ---------------------------------------------------------------
+# The newest non-pre-release GitHub Release carries latest.json (see scripts/make_manifest.py).
+UPDATE_MANIFEST_URL = ("https://github.com/asamoahboateng/simple-med-tracker"
+                       "/releases/latest/download/latest.json")
+UPDATE_CHECK_HOURS = 24                 # how often the automatic check may run
+# Installers may only be downloaded from these hosts (GitHub redirects downloads to the
+# githubusercontent ones).
+UPDATE_ALLOWED_HOSTS = ("github.com", "objects.githubusercontent.com",
+                        "release-assets.githubusercontent.com")
+RELEASES_PAGE_URL = "https://github.com/asamoahboateng/simple-med-tracker/releases"
 
 # Suggested units shown in the "unit" drop-down (users may type their own).
 COMMON_UNITS = [
@@ -43,6 +54,13 @@ def data_dir() -> Path:
 def backups_dir() -> Path:
     """Default folder offered when making a backup."""
     path = data_dir() / "backups"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def updates_dir() -> Path:
+    """Folder where downloaded installers are kept (local, never roamed or backed up)."""
+    path = Path(user_data_dir(APP_NAME, appauthor=False, roaming=False)) / "updates"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

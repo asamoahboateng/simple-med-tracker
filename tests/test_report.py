@@ -151,3 +151,32 @@ def test_invalid_ranges_are_rejected(conn):
         except logic.ValidationError:
             continue
         raise AssertionError(f"{start}..{end} should be rejected")
+
+
+def _make_newer_db(path):
+    import sqlite3
+    other = db.connect(path)
+    other.close()
+    raw = sqlite3.connect(str(path))
+    raw.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION + 1}")
+    raw.close()
+
+
+def test_newer_database_is_refused(tmp_path):
+    import pytest
+    _make_newer_db(tmp_path / "newer.db")
+    with pytest.raises(db.NewerDatabaseError) as info:
+        db.connect(tmp_path / "newer.db")
+    assert info.value.version == db.SCHEMA_VERSION + 1
+    assert "newer version of MedTracker" in str(info.value)
+
+
+def test_newer_backup_is_not_restored(conn, add, tmp_path):
+    import pytest
+    add()
+    _make_newer_db(tmp_path / "newer.db")
+    assert not db.is_valid_backup(tmp_path / "newer.db")
+    assert db.backup_version(tmp_path / "newer.db") == db.SCHEMA_VERSION + 1
+    with pytest.raises(db.NewerDatabaseError):
+        db.restore_from(conn, tmp_path / "newer.db")
+    assert len(db.list_medicines(conn)) == 1       # current data untouched

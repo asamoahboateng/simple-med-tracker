@@ -129,6 +129,16 @@ REQUIRED_TABLES = {"medicines", "batches", "transactions"}
 # Connection helpers
 # --------------------------------------------------------------------------
 
+class NewerDatabaseError(Exception):
+    """The data was saved by a newer MedTracker than this one."""
+
+    def __init__(self, version: int):
+        self.version = version
+        super().__init__(
+            f"This data was saved by a newer version of MedTracker (data format {version}). "
+            f"Install the latest version to open it.")
+
+
 def connect(path) -> sqlite3.Connection:
     """Open (and if needed create) the database at `path`."""
     conn = sqlite3.connect(str(path), isolation_level=None)  # autocommit mode
@@ -137,12 +147,19 @@ def connect(path) -> sqlite3.Connection:
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
-    init_schema(conn)
+    try:
+        init_schema(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
     """Create missing tables and upgrade older databases (safe to call every start)."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version > SCHEMA_VERSION:       # never touch data a newer app saved
+        raise NewerDatabaseError(version)
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(transactions)")}
     if columns and "entered_by" not in columns:
         # Version 1 had no sign-in: add the column and label the existing rows.
@@ -698,8 +715,20 @@ def backup_to(conn, dest_path) -> None:
         dest.close()
 
 
+def backup_version(path) -> int:
+    """The data format number stored in the file at `path` (0 if unreadable or new)."""
+    try:
+        src = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
+        try:
+            return src.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            src.close()
+    except sqlite3.Error:
+        return 0
+
+
 def is_valid_backup(path) -> bool:
-    """True if `path` is a readable SQLite file containing MedTracker's tables."""
+    """True if `path` is a readable SQLite file with MedTracker's tables that this version can open."""
     try:
         src = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
         try:
@@ -708,13 +737,16 @@ def is_valid_backup(path) -> bool:
             ok = src.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         finally:
             src.close()
-        return ok and REQUIRED_TABLES.issubset(names)
+        return ok and REQUIRED_TABLES.issubset(names) and backup_version(path) <= SCHEMA_VERSION
     except sqlite3.Error:
         return False
 
 
 def restore_from(conn, src_path) -> None:
     """Replace the live database contents with the backup at `src_path`."""
+    version = backup_version(src_path)
+    if version > SCHEMA_VERSION:
+        raise NewerDatabaseError(version)
     src = sqlite3.connect(str(src_path))
     try:
         src.backup(conn)

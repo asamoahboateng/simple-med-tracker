@@ -69,7 +69,7 @@ jobs:
             mac="$IN_MAC"; linux="$IN_LINUX"
           fi
 
-          entries='{"os":"windows-latest","asset":"MedTracker-Windows.exe"}'
+          entries='{"os":"windows-latest","asset":"MedTracker-Windows-portable.zip"}'
           if [ "$mac" = "true" ]; then
             entries="$entries"',{"os":"macos-latest","asset":"MedTracker-macOS-AppleSilicon.zip"}'
             entries="$entries"',{"os":"macos-15-intel","asset":"MedTracker-macOS-Intel.zip"}'
@@ -135,7 +135,44 @@ jobs:
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        run: cp dist/MedTracker.exe "${{ matrix.asset }}"
+        # PyInstaller made the folder dist/MedTracker. Inno Setup turns it into the installer
+        # (MedTracker-Setup-<version>.exe); the zip is for people who can't run an installer.
+        run: |
+          VERSION=$("$VENV_PY" -c "import config; print(config.APP_VERSION)")
+          choco install innosetup -y --no-progress
+          ISCC=""
+          for candidate in "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+                           "/c/Program Files/Inno Setup 6/ISCC.exe" \
+                           "$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe"; do
+            if [ -f "$candidate" ]; then ISCC="$candidate"; break; fi
+          done
+          if [ -z "$ISCC" ]; then ISCC=$(command -v iscc || true); fi
+          if [ -z "$ISCC" ]; then echo "Inno Setup (ISCC.exe) was not found"; exit 1; fi
+          # MSYS_NO_PATHCONV stops Git Bash from rewriting the /D option as a path
+          MSYS_NO_PATHCONV=1 "$ISCC" "/DMyAppVersion=$VERSION" installer/medtracker.iss
+          cp "dist/MedTracker-Setup-$VERSION.exe" .      # next to the zip, so the release step finds it
+          ls -l "MedTracker-Setup-$VERSION.exe"
+          powershell -NoProfile -Command "Compress-Archive -Path dist/MedTracker -DestinationPath '${{ matrix.asset }}' -Force"
+
+      - name: Write latest.json (Windows, tags only)
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        # The installed app reads this file to find updates. Notes = the tag message
+        # (annotated tags) or else the tagged commit's message.
+        run: |
+          VERSION=$("$VENV_PY" -c "import config; print(config.APP_VERSION)")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match APP_VERSION $VERSION in config.py"; exit 1
+          fi
+          git fetch --depth=1 origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.txt
+          if ! grep -q '[^[:space:]]' notes.txt; then
+            git log -1 --format=%B "$GITHUB_REF_NAME" > notes.txt
+          fi
+          "$VENV_PY" scripts/make_manifest.py \
+            --installer "MedTracker-Setup-$VERSION.exe" --version "$VERSION" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME" \
+            --notes-file notes.txt --out latest.json
+          cat latest.json
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -157,6 +194,8 @@ jobs:
           path: |
             ${{ matrix.asset }}
             MedTracker-macOS-*.dmg
+            MedTracker-Setup-*.exe
+            latest.json
           if-no-files-found: error
 
   release:
@@ -178,8 +217,10 @@ jobs:
           files: builds/*
           body: |
             Downloads (only the platforms built for this release are attached):
-            - **Windows 10/11**: `MedTracker-Windows.exe` - double-click to run
-              (if SmartScreen warns, click "More info" then "Run anyway").
+            - **Windows 10/11**: `MedTracker-Setup-<version>.exe` - run it to install (no administrator
+              needed; if SmartScreen warns, click "More info" then "Run anyway"). Installed copies
+              update themselves. `MedTracker-Windows-portable.zip` is the same program without an
+              installer (it will not update itself). `latest.json` is read by the app's updater.
             - **Mac with Apple Silicon (M1 or newer)**: `MedTracker-macOS-AppleSilicon.dmg` (or `.zip`)
             - **Mac with Intel processor**: `MedTracker-macOS-Intel.dmg` (or `.zip`)
               Open the .dmg and drag MedTracker to Applications. The app is not notarized by Apple, so
