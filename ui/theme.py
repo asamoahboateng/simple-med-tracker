@@ -6,6 +6,8 @@ Widgets opt into styles with setObjectName(...) or a "kind" property, e.g.
 so page code stays free of colour details.
 """
 
+import re
+
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
@@ -90,6 +92,39 @@ def save_preset(name: str) -> None:
     _settings().setValue("appearance/theme", name)
 
 
+# --- zoom ------------------------------------------------------------------
+# Scales text, padding and row heights so the app fits small screens (zoom out)
+# or is easier to read (zoom in). Charts keep their drawn size.
+ZOOM_LEVELS = (0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6)
+zoom = 1.0
+
+
+def px(size: float) -> int:
+    """A pixel size at the current zoom (never below 1 for a non-zero size)."""
+    return max(1, round(size * zoom)) if size else 0
+
+
+def saved_zoom() -> float:
+    try:
+        value = float(_settings().value("appearance/zoom", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return value if value in ZOOM_LEVELS else 1.0
+
+
+def set_zoom(value: float) -> None:
+    """Set and remember the zoom. Widgets created afterwards use it."""
+    global zoom
+    zoom = value if value in ZOOM_LEVELS else 1.0
+    _settings().setValue("appearance/zoom", zoom)
+
+
+def step_zoom(steps: int) -> float:
+    """The zoom level `steps` places bigger (+) or smaller (-) than the current one."""
+    i = ZOOM_LEVELS.index(zoom) if zoom in ZOOM_LEVELS else ZOOM_LEVELS.index(1.0)
+    return ZOOM_LEVELS[min(max(i + steps, 0), len(ZOOM_LEVELS) - 1)]
+
+
 FONT_FAMILY = "Atkinson Hyperlegible Next"   # bundled in resources/fonts (OFL licence)
 
 
@@ -103,14 +138,14 @@ def _stylesheet() -> str:
     down = resource_path("resources/chevron-down.svg").as_posix()
     up = resource_path("resources/chevron-up.svg").as_posix()
     check = resource_path("resources/check.svg").as_posix()
-    return f"""
+    return _zoomed(f"""
     QWidget {{ color: {TEXT}; }}
     QMainWindow, QWidget#page, QWidget#pageContent, QScrollArea, QScrollArea > QWidget > QWidget
         {{ background: {BG}; }}
     QDialog {{ background: {BG}; }}
 
     /* ---------- sidebar ---------- */
-    QWidget#sidebar {{ background: {NAVY}; }}
+    QWidget#sidebar, QScrollArea#sidebarScroll {{ background: {NAVY}; }}
     QWidget#sidebar QLabel {{ background: transparent; }}
     QLabel#brandTitle {{ color: white; font-size: 19px; font-weight: 700; }}
     QLabel#brandSub {{ color: {SIDEBAR_MUTED}; font-size: 12px; }}
@@ -197,6 +232,19 @@ def _stylesheet() -> str:
         {{ background: {SURFACE}; color: #9aa5b5; border: 1px solid {BORDER}; }}
     QPushButton[size="large"] {{ padding: 11px 22px; font-size: 14px; border-radius: 10px; }}
 
+    /* ---------- keyboard focus ---------- */
+    QPushButton:focus, QPushButton[kind="danger"]:focus, QPushButton[kind="outline"]:focus,
+    QPushButton[kind="chip"]:focus {{ border-color: {BLUE}; }}
+    QPushButton[kind="primary"]:focus, QPushButton[kind="blue"]:focus, QPushButton[kind="link"]:focus,
+    QPushButton[kind="segment"]:focus, QPushButton[kind="stepper"]:focus,
+    QPushButton#sideAction:focus {{ text-decoration: underline; }}
+    QPushButton#sideAction:focus {{ border-color: white; }}
+    QTableView {{ outline: 0; }}          /* the row highlight marks the current row */
+    QTableView:focus {{ border: 1.5px solid {PRIMARY}; }}
+    QCheckBox:focus {{ text-decoration: underline; }}
+    QCheckBox::indicator:focus {{ border: 1.5px solid {PRIMARY}; }}
+    QListWidget#nav:focus {{ border-left: 3px solid white; }}
+
     /* ---------- inputs ---------- */
     QLineEdit, QComboBox, QSpinBox, QDateEdit {{
         background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 8px;
@@ -245,6 +293,7 @@ def _stylesheet() -> str:
     QScrollBar:horizontal {{ background: transparent; height: 11px; margin: 2px; }}
     QScrollBar::handle:horizontal {{ background: #c9d2df; border-radius: 4px; min-width: 30px; }}
     QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+    QScrollArea#sidebarScroll QScrollBar::handle:vertical {{ background: {SIDEBAR_BORDER}; }}
     QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
     QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; color: {TEXT_MUTED}; }}
     QStatusBar QLabel {{ color: {TEXT_MUTED}; padding: 2px 6px; }}
@@ -259,7 +308,12 @@ def _stylesheet() -> str:
     QMessageBox {{ background: {SURFACE}; }}
     QCalendarWidget QWidget {{ alternate-background-color: #f6f8fc; }}
     QCalendarWidget QToolButton {{ color: {TEXT}; background: transparent; font-weight: 600; }}
-    """
+    """)
+
+
+def _zoomed(css: str) -> str:
+    """Scale every pixel size in a stylesheet by the current zoom."""
+    return re.sub(r"(?<![\d.])(\d+)px", lambda m: f"{px(int(m.group(1)))}px", css)
 
 
 def apply_theme(app: QApplication, preset: str | None = None) -> None:
@@ -268,6 +322,8 @@ def apply_theme(app: QApplication, preset: str | None = None) -> None:
     given colour preset, or the one saved last time.
     """
     set_preset(preset or saved_preset())
+    global zoom
+    zoom = saved_zoom()
     app.setStyle("Fusion")
     palette = QPalette()
     for role, colour in {
@@ -282,7 +338,9 @@ def apply_theme(app: QApplication, preset: str | None = None) -> None:
     font = app.font()
     if _load_font():
         font.setFamily(FONT_FAMILY)
-    font.setPointSizeF(max(font.pointSizeF(), 10.0))
+    if not hasattr(app, "_base_point_size"):     # the size before any zoom
+        app._base_point_size = max(font.pointSizeF(), 10.0)
+    font.setPointSizeF(app._base_point_size * zoom)
     font.setHintingPreference(QFont.PreferNoHinting)
     app.setFont(font)
     app.setStyleSheet(_stylesheet())

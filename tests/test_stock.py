@@ -211,3 +211,26 @@ def test_old_database_gets_medicine_notes(tmp_path):
     conn = db.connect(path)
     assert logic.medicine_rows(conn)[0]["note"] == ""
     conn.close()
+
+
+def test_items_without_expiry(conn, add, give):
+    logic.add_stock(conn, "2026-06-01", "Stretcher", 7, "UNP 5-66", None, unit="pieces",
+                    reorder_level=0, today=TODAY)
+    batch = next(b for b in logic.batch_rows(conn, TODAY) if b["medicine"] == "Stretcher")
+    assert batch["expiry"] == "9999-12-31"
+    assert (batch["days_to_expiry"], batch["status"]) == (None, logic.BATCH_OK)
+    assert logic.expiry_label(batch["expiry"]) == "No expiry"
+    assert logic.expiry_phrase(batch["expiry"]) == "no expiry"
+    assert logic.check_add_stock(conn, "2026-06-01", "Stretcher", "UNP 5-66", None).already_expired is False
+    # Never offered as expired or expiring, and dispensed last after dated batches.
+    data = logic.dashboard_data(conn, TODAY)
+    assert all(b["medicine"] != "Stretcher" for b in data.expiry_alerts)
+    add(name="Stretcher", qty=3, batch="DATED", expiry="2027-01-31")
+    result = give(name="Stretcher", qty=4)
+    assert [(a.batch_no, a.quantity) for a in result.allocations] == [("DATED", 3), ("UNP 5-66", 1)]
+    med = next(m for m in logic.medicine_rows(conn) if m["name"] == "Stretcher")
+    assert med["nearest_expiry"] == "9999-12-31"         # only the no-expiry batch has stock left
+    # A batch can be switched to "no expiry" and back.
+    logic.edit_batch(conn, batch["id"], "UNP 5-66", "2028-01-31")
+    logic.edit_batch(conn, batch["id"], "UNP 5-66", None)
+    assert next(b for b in logic.batch_rows(conn, TODAY) if b["id"] == batch["id"])["expiry"] == "9999-12-31"

@@ -24,7 +24,7 @@ LOG_COLUMNS = [
     Column("type", "Type", "center"),
     Column("quantity", "Quantity", "right", int_fmt),
     Column("batch_no", "Batch No"),
-    Column("expiry", "Expiry"),
+    Column("expiry", "Expiry", fmt=logic.expiry_label),
     Column("patient_id", "Patient ID"),
     Column("prescriber", "Prescriber"),
     Column("reason", "Reason removed"),
@@ -220,7 +220,7 @@ class LogPage(QWidget):
 
     # --- export -------------------------------------------------------------
     def export(self, kind: str):
-        rows = self.proxy.visible_rows()
+        rows = [{**r, "expiry": logic.expiry_label(r["expiry"])} for r in self.proxy.visible_rows()]
         if not rows:
             show_info(self, "There are no rows to export with the current filters.", "Export")
             return

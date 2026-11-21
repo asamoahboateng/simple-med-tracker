@@ -27,7 +27,7 @@ def _link(text: str, slot) -> QPushButton:
 def _field(placeholder: str = "", secret: bool = False, digits: int = 0) -> QLineEdit:
     edit = QLineEdit()
     edit.setPlaceholderText(placeholder)
-    edit.setMinimumHeight(38)
+    edit.setMinimumHeight(theme.px(38))
     if secret:
         edit.setEchoMode(QLineEdit.Password)
     if digits:                       # numbers only, at most `digits` of them
@@ -66,10 +66,10 @@ class LoginDialog(QDialog):
             logo.setPixmap(pixmap)
         title = QLabel(config.APP_NAME)
         title.setObjectName("brandTitle")
-        title.setStyleSheet("font-size: 26px;")
+        title.setStyleSheet(f"font-size: {theme.px(26)}px;")
         sub = QLabel("Pharmacy inventory")
         sub.setObjectName("brandSub")
-        sub.setStyleSheet("font-size: 14px;")
+        sub.setStyleSheet(f"font-size: {theme.px(14)}px;")
         bcol.addWidget(logo)
         bcol.addSpacing(12)
         bcol.addWidget(title)

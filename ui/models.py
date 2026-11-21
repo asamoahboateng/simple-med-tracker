@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 import auth
 import logic
+from ui import theme
 
 SORT_ROLE = Qt.UserRole + 1
 
@@ -179,10 +180,37 @@ class TableProxy(QSortFilterProxyModel):
                 for r in range(self.rowCount())]
 
 
+class RecordTableView(QTableView):
+    """
+    QTableView that works well from the keyboard: Tab moves on to the next control
+    (not the next cell), Enter acts like a double-click on the current row, and
+    the first row is selected when the table gets focus with nothing chosen.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTabKeyNavigation(False)
+
+    def keyPressEvent(self, event):
+        index = self.currentIndex()
+        if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and index.isValid()
+                and self.state() != QAbstractItemView.EditingState):
+            self.doubleClicked.emit(index)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        model = self.model()
+        if not self.currentIndex().isValid() and model is not None and model.rowCount():
+            self.setCurrentIndex(model.index(0, 0))
+        super().focusInEvent(event)
+
+
 def make_table(model: RecordTableModel, proxy: TableProxy) -> QTableView:
-    """Create a QTableView with the standard MedTracker settings."""
+    """Create a table view with the standard MedTracker settings."""
     proxy.setSourceModel(model)
-    view = QTableView()
+    view = RecordTableView()
     view.setModel(proxy)
     view.setSortingEnabled(True)
     view.setAlternatingRowColors(True)
@@ -193,7 +221,7 @@ def make_table(model: RecordTableModel, proxy: TableProxy) -> QTableView:
     view.setSelectionBehavior(QAbstractItemView.SelectRows)
     view.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
     view.verticalHeader().setVisible(False)
-    view.verticalHeader().setDefaultSectionSize(36)
+    view.verticalHeader().setDefaultSectionSize(theme.px(36))
     header = view.horizontalHeader()
     header.setSectionResizeMode(QHeaderView.Interactive)
     header.setStretchLastSection(True)

@@ -17,6 +17,10 @@ Main rules
   first, but expired batches are included: they are usually what is removed.
 * A batch counts as expired for dispensing when its expiry date is BEFORE the
   dispensing date (it can still be used on its expiry day).
+* Items that never expire (equipment, devices...) are stored with the expiry
+  date NO_EXPIRY (9999-12-31) and shown as "No expiry". Being the latest
+  possible date, it sorts last, is never expired or expiring, and needs no
+  special case in the database queries.
 """
 
 import calendar
@@ -31,6 +35,10 @@ STOCK_IN = "STOCK_IN"
 DISPENSED = "DISPENSED"
 REMOVED = "REMOVED"
 TYPE_NAMES = {STOCK_IN: "Stock in", DISPENSED: "Dispensed", REMOVED: "Removed"}
+
+# Expiry date stored for batches that never expire (shown as "No expiry").
+NO_EXPIRY = date(9999, 12, 31)
+NO_EXPIRY_LABEL = "No expiry"
 
 # Suggested reasons for removing stock (any other text is allowed too).
 REMOVAL_REASONS = ["Expired", "Recalled", "Damaged", "Lost or stolen", "Other"]
@@ -144,7 +152,27 @@ def stock_status(stock: int, reorder_level: int) -> str:
     return STATUS_OK
 
 
-def days_to_expiry(expiry, today: date) -> int:
+def has_expiry(expiry) -> bool:
+    """False for batches that never expire (and for a missing date)."""
+    return bool(expiry) and to_date(expiry) != NO_EXPIRY
+
+
+def expiry_label(expiry) -> str:
+    """An expiry date for display: 'YYYY-MM-DD', or 'No expiry'."""
+    if not expiry:
+        return ""
+    return to_date(expiry).isoformat() if has_expiry(expiry) else NO_EXPIRY_LABEL
+
+
+def expiry_phrase(expiry) -> str:
+    """For sentences and lists: 'expires 2027-01-31', or 'no expiry'."""
+    return f"expires {expiry_label(expiry)}" if has_expiry(expiry) else "no expiry"
+
+
+def days_to_expiry(expiry, today: date) -> int | None:
+    """Days until the expiry date (negative once expired); None if it never expires."""
+    if not has_expiry(expiry):
+        return None
     return (to_date(expiry) - today).days
 
 
@@ -152,6 +180,8 @@ def batch_status(remaining: int, expiry, today: date) -> str:
     if remaining <= 0:
         return BATCH_USED_UP
     days = days_to_expiry(expiry, today)
+    if days is None:
+        return BATCH_OK
     if days < 0:
         return BATCH_EXPIRED
     if days <= EXPIRY_WARNING_DAYS:
@@ -288,8 +318,9 @@ class AddStockResult:
 
 
 def check_add_stock(conn, stock_date, medicine_name, batch_no, expiry_date) -> AddStockCheck:
+    """expiry_date=None means the item never expires."""
     stock_date = to_date(stock_date)
-    expiry_date = to_date(expiry_date)
+    expiry_date = NO_EXPIRY if expiry_date is None else to_date(expiry_date)
     medicine_name = require_text(medicine_name, "Medicine name")
     batch_no = require_text(batch_no, "Batch number")
 
@@ -314,11 +345,11 @@ def add_stock(conn, stock_date, medicine_name, quantity, batch_no, expiry_date,
     """
     Record stock received. Creates the medicine (needs unit + reorder level)
     and/or the batch if they are new. If the batch already exists, its
-    original expiry date is kept.
+    original expiry date is kept. expiry_date=None means the item never expires.
     """
     today = today or date.today()
     stock_date = to_date(stock_date)
-    expiry_date = to_date(expiry_date)
+    expiry_date = NO_EXPIRY if expiry_date is None else to_date(expiry_date)
     quantity = validate_quantity(quantity)
     medicine_name = require_text(medicine_name, "Medicine name")
     batch_no = require_text(batch_no, "Batch number")
@@ -714,10 +745,10 @@ def edit_batch(conn, batch_id: int, batch_no, expiry_date, received=None,
     Correct a batch's number, expiry date and (optionally) the quantity received,
     all in one database transaction. The received quantity can only be changed
     when the batch came in one delivery; that delivery's entry is corrected
-    (checked and audited like any quantity correction).
+    (checked and audited like any quantity correction). expiry_date=None = never expires.
     """
     batch_no = require_text(batch_no, "Batch number")
-    expiry_date = to_date(expiry_date).isoformat()
+    expiry_date = (NO_EXPIRY if expiry_date is None else to_date(expiry_date)).isoformat()
     if received is not None:
         received = validate_quantity(received)
     with db.transaction(conn):

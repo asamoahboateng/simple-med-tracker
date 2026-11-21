@@ -88,7 +88,7 @@ class DispenseDialog(QDialog):
         usable_total = sum(b.remaining for b in usable)
         for b in usable:
             self.batch_combo.addItem(
-                f"{b.batch_no}  -  expires {b.expiry.isoformat()}  -  {b.remaining:,} left",
+                f"{b.batch_no}  -  {logic.expiry_phrase(b.expiry)}  -  {b.remaining:,} left",
                 b.batch_no)
 
         text = f"Available stock: {stock:,} {med['unit']}"
@@ -118,7 +118,7 @@ class DispenseDialog(QDialog):
             show_error(self, str(exc), title="Cannot save")
             return
 
-        used = "\n".join(f"  - Batch {a.batch_no} (exp {a.expiry.isoformat()}): {a.quantity:,}"
+        used = "\n".join(f"  - Batch {a.batch_no} ({logic.expiry_phrase(a.expiry)}): {a.quantity:,}"
                          for a in result.allocations)
         message = (f"Dispensed {result.quantity:,} {result.unit} of {result.medicine_name}.\n\n"
                    f"Batches used:\n{used}\n\n"

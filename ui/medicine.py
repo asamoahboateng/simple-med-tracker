@@ -60,3 +60,59 @@ class NewMedicineDialog(QDialog):
             return
         show_info(self, f"'{self.name_edit.text().strip()}' was added.", title="Medicine added")
         self.accept()
+
+
+class EditMedicineDialog(QDialog):
+    """Edit a medicine's name, unit, reorder level and note."""
+
+    def __init__(self, conn, medicine: dict, parent=None):
+        super().__init__(parent)
+        self.conn = conn
+        self.medicine = medicine
+        self.setWindowTitle("Edit Medicine")
+        self.setMinimumWidth(520)
+
+        self.name_edit = QLineEdit(medicine["name"])
+        unit_box, self.unit_combo = unit_picker(conn, self)
+        self.unit_combo.setCurrentText(medicine["unit"])
+        self.reorder_spin = QSpinBox()
+        self.reorder_spin.setRange(0, 10_000_000)
+        self.reorder_spin.setGroupSeparatorShown(True)
+        self.reorder_spin.setValue(int(medicine["reorder_level"]))
+        self.reorder_spin.setToolTip("Show a LOW STOCK warning when stock falls to this level")
+        self.note_edit = QLineEdit(medicine["note"] or "")
+        self.note_edit.setPlaceholderText("Optional, e.g. Store below 25°C")
+        self.note_edit.setMaxLength(500)
+
+        form = QFormLayout()
+        form.addRow("Medicine name:", self.name_edit)
+        form.addRow("Unit:", unit_box)
+        form.addRow("Reorder level:", self.reorder_spin)
+        form.addRow("Note:", self.note_edit)
+        form.addRow("Current stock:", QLabel(f"{int(medicine['stock']):,} {medicine['unit']}"))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.save)
+        buttons.rejected.connect(self.reject)
+
+        style_dialog_buttons(buttons)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(14)
+        layout.addWidget(dialog_header("Edit Medicine", "Change the name, unit, reorder level or note",
+                                       "✎", theme.PRIMARY))
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def save(self):
+        med = self.medicine
+        try:
+            if self.name_edit.text().strip() != med["name"]:
+                logic.rename_medicine(self.conn, med["id"], self.name_edit.text())
+            logic.update_medicine_settings(self.conn, med["id"], unit=self.unit_combo.currentText(),
+                                           reorder_level=self.reorder_spin.value(),
+                                           note=self.note_edit.text())
+        except logic.ValidationError as exc:
+            show_error(self, str(exc))
+            return
+        self.accept()

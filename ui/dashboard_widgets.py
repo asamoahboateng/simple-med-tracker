@@ -224,7 +224,7 @@ class AttentionGroup(QWidget):
         mark.setFixedSize(12, 12)
         mark.setStyleSheet(f"background: {colour}; border-radius: {2 if diamond else 6}px;")
         self.count = _label("0")
-        self.count.setStyleSheet(f"font-size: 22px; font-weight: 800; color: {count_colour};")
+        self.count.setStyleSheet(f"font-size: {theme.px(22)}px; font-weight: 800; color: {count_colour};")
         head = QHBoxLayout()
         head.setSpacing(10)
         head.addWidget(mark)

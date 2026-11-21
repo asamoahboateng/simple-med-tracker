@@ -4,7 +4,7 @@ from datetime import date
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCompleter, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QLabel, QLineEdit,
+    QCheckBox, QCompleter, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QLabel, QLineEdit,
     QSpinBox, QVBoxLayout,
 )
 
@@ -46,6 +46,8 @@ class AddStockDialog(QDialog):
         self.batch_hint.setWordWrap(True)
 
         self.expiry_edit = OptionalDateEdit()
+        self.no_expiry = QCheckBox("No expiry date (equipment, devices...)")
+        self.no_expiry.toggled.connect(lambda on: self.expiry_edit.setEnabled(not on))
 
         # Extra fields shown only when the medicine is new.
         self.new_box = QGroupBox("New medicine - please also enter:")
@@ -67,6 +69,7 @@ class AddStockDialog(QDialog):
         form.addRow("Batch number:", self.batch_edit)
         form.addRow("", self.batch_hint)
         form.addRow("Expiry date:", self.expiry_edit)
+        form.addRow("", self.no_expiry)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
@@ -114,9 +117,12 @@ class AddStockDialog(QDialog):
         batch = db.find_batch(self.conn, med["id"], batch_no) if med and batch_no else None
         if batch:
             self.batch_hint.setText(
-                f"Existing batch - expiry {batch['expiry_date']} "
+                f"Existing batch - {logic.expiry_phrase(batch['expiry_date'])} "
                 f"(the original expiry date is always kept).")
-            self.expiry_edit.setDate(to_qdate(logic.to_date(batch["expiry_date"])))
+            never = not logic.has_expiry(batch["expiry_date"])
+            self.no_expiry.setChecked(never)
+            if not never:
+                self.expiry_edit.setDate(to_qdate(logic.to_date(batch["expiry_date"])))
         self.form.setRowVisible(self.batch_hint, batch is not None)
 
     # --- save ---------------------------------------------------------------
@@ -124,19 +130,20 @@ class AddStockDialog(QDialog):
         try:
             name = logic.require_text(self.medicine_combo.text(), "Medicine")
             batch_no = logic.require_text(self.batch_edit.text(), "Batch number")
-            expiry = self.expiry_edit.value()
-            if expiry is None:
-                raise logic.ValidationError("Expiry date is required.")
+            expiry = None if self.no_expiry.isChecked() else self.expiry_edit.value()
+            if expiry is None and not self.no_expiry.isChecked():
+                raise logic.ValidationError(
+                    "Expiry date is required (or tick \"No expiry date\" for items that never expire).")
             stock_date: date = to_py_date(self.date_edit.date())
             check = logic.check_add_stock(self.conn, stock_date, name, batch_no, expiry)
 
             if check.expiry_conflict:
                 if not ask_yes_no(
                         self,
-                        f"Batch '{batch_no}' already exists for this medicine with expiry "
-                        f"date {check.existing_expiry.isoformat()}.\n\n"
-                        f"The expiry date you entered ({expiry.isoformat()}) will be IGNORED "
-                        f"and the original expiry date will be kept.\n\nContinue?",
+                        f"Batch '{batch_no}' already exists for this medicine "
+                        f"({logic.expiry_phrase(check.existing_expiry)}).\n\n"
+                        f"The expiry you entered ({logic.expiry_label(expiry or logic.NO_EXPIRY)}) "
+                        f"will be IGNORED and the original one will be kept.\n\nContinue?",
                         title="Different expiry date", yes_text="Continue", no_text="Go back"):
                     return
             if check.already_expired:
@@ -157,7 +164,7 @@ class AddStockDialog(QDialog):
             return
 
         lines = [f"Added {result.quantity:,} {result.unit} of {result.medicine_name}",
-                 f"Batch {result.batch_no} (expiry {result.expiry.isoformat()})", "",
+                 f"Batch {result.batch_no} ({logic.expiry_phrase(result.expiry)})", "",
                  f"New stock level: {result.new_stock:,} {result.unit}"]
         if result.created_medicine:
             lines.insert(0, "New medicine created.\n")

@@ -4,10 +4,12 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import (
+    QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QFrame, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 import auth
@@ -35,7 +37,7 @@ class MainWindow(QMainWindow):
     # Emitted when the user signs out (or loses access); the message is shown on the
     # sign-in window. The database connection stays open for the next session.
     signed_out = Signal(str)
-    # Emitted after the colour theme changed: main.py rebuilds the window in the new colours.
+    # Emitted after the colour theme or zoom changed: main.py rebuilds the window with them.
     restyle_requested = Signal()
 
     def __init__(self, conn, db_path: Path, user: auth.User, demo: bool = False):
@@ -116,7 +118,6 @@ class MainWindow(QMainWindow):
         side = QWidget()
         side.setObjectName("sidebar")
         side.setAttribute(Qt.WA_StyledBackground, True)
-        side.setFixedWidth(232)
         self.side = side
         self.compact = False
         self.wide_only = []          # widgets hidden when the sidebar is compact
@@ -159,8 +160,15 @@ class MainWindow(QMainWindow):
         for label, icon_name, _ in self.pages:
             self.sidebar.addItem(QListWidgetItem(
                 icons.icon(icon_name, theme.SIDEBAR_TEXT, selected_colour=theme.TEXT), label))
-        self.sidebar.setFixedHeight(len(self.pages) * 48 + 8)
+        self.sidebar.ensurePolished()
+        self.sidebar.setFixedHeight(len(self.pages) * self.sidebar.sizeHintForRow(0) + 8)
         self.sidebar.currentRowChanged.connect(self.show_page)
+        self.sidebar.setAccessibleName("Pages")
+        # Enter or Right arrow in the page list moves into the page.
+        for key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Right):
+            shortcut = QShortcut(QKeySequence(key), self.sidebar)
+            shortcut.setContext(Qt.WidgetShortcut)
+            shortcut.activated.connect(self.focus_page)
         col.addWidget(self.sidebar)
 
         col.addSpacing(10)
@@ -190,7 +198,7 @@ class MainWindow(QMainWindow):
         who_col.setSpacing(0)
         name = QLabel(self.user.full_name)
         name.setObjectName("brandTitle")
-        name.setStyleSheet("font-size: 14px;")
+        name.setStyleSheet(f"font-size: {theme.px(14)}px;")
         role = QLabel("Signed in with the code" if self.user.id is None
                       else f"{self.user.role_name}, {self.user.username}")
         role.setObjectName("brandSub")
@@ -217,14 +225,24 @@ class MainWindow(QMainWindow):
         version.setObjectName("versionLabel")
         col.addWidget(version)
         self.wide_only.append(version)
-        return side
+
+        # Scrolls when the window is too short for everything (small screens, big text).
+        scroll = QScrollArea()
+        scroll.setObjectName("sidebarScroll")
+        scroll.setWidget(side)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFixedWidth(theme.px(232))
+        self.side_scroll = scroll
+        return scroll
 
     def set_compact_sidebar(self, compact: bool) -> None:
         """Icons-only sidebar for small windows (hover an icon to see its name)."""
         if compact == self.compact:
             return
         self.compact = compact
-        self.side.setFixedWidth(76 if compact else 232)
+        self.side_scroll.setFixedWidth(76 if compact else theme.px(232))
         self.brand_layout.setContentsMargins(18, 0, 12 if not compact else 0, 14)
         for widget in self.wide_only:
             widget.setVisible(not compact)
@@ -251,6 +269,17 @@ class MainWindow(QMainWindow):
         if id(page) in self.dirty:
             page.refresh()
             self.dirty.discard(id(page))
+
+    def focus_page(self):
+        """Put the keyboard focus on the first control of the current page."""
+        page = self.stack.currentWidget()
+        widget = page.nextInFocusChain()
+        while widget is not page:          # the focus chain is a loop
+            if (page.isAncestorOf(widget) and widget.isVisible() and widget.isEnabled()
+                    and widget.focusPolicy() & Qt.TabFocus):
+                widget.setFocus(Qt.TabFocusReason)
+                return
+            widget = widget.nextInFocusChain()
 
     def data_changed(self):
         """Something was saved: refresh the visible page now, the others when shown."""
@@ -330,6 +359,31 @@ class MainWindow(QMainWindow):
         theme.apply_theme(QApplication.instance(), name)
         self.restyle_requested.emit()
 
+    def change_zoom(self, value: float) -> None:
+        if value == theme.zoom:
+            return
+        theme.set_zoom(value)
+        theme.apply_theme(QApplication.instance())
+        self.restyle_requested.emit()
+
+    def _zoom_buttons(self) -> QWidget:
+        """A− / 100% / A+ buttons at the right end of the menu bar."""
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 12, 0)
+        row.setSpacing(12)
+        for text, tip, slot in (
+                ("A−", "Smaller text (Ctrl+−)", lambda: self.change_zoom(theme.step_zoom(-1))),
+                (f"{round(theme.zoom * 100)}%", "Normal text size (Ctrl+0)", lambda: self.change_zoom(1.0)),
+                ("A+", "Larger text (Ctrl++)", lambda: self.change_zoom(theme.step_zoom(1)))):
+            button = QPushButton(text)
+            button.setProperty("kind", "link")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(tip)
+            button.clicked.connect(slot)
+            row.addWidget(button)
+        return box
+
     def set_sign_in_code(self):
         dialog = PasswordDialog(
             "Set sign-in code",
@@ -406,6 +460,22 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _checked=False, n=name: self.change_colours(n))
             group.addAction(action)
             colours.addAction(action)
+
+        sizes = view_menu.addMenu("Text size")
+        bigger = self._action(sizes, "Larger", lambda: self.change_zoom(theme.step_zoom(1)))
+        bigger.setShortcuts([QKeySequence.ZoomIn, QKeySequence("Ctrl+=")])
+        self._action(sizes, "Smaller", lambda: self.change_zoom(theme.step_zoom(-1)), QKeySequence.ZoomOut)
+        self._action(sizes, "Normal", lambda: self.change_zoom(1.0), "Ctrl+0")
+        sizes.addSeparator()
+        group = QActionGroup(self)
+        for level in theme.ZOOM_LEVELS:
+            action = QAction(f"{round(level * 100)}%", self, checkable=True)
+            action.setChecked(level == theme.zoom)
+            action.triggered.connect(lambda _checked=False, z=level: self.change_zoom(z))
+            group.addAction(action)
+            sizes.addAction(action)
+        self.zoom_box = self._zoom_buttons()     # kept here: the menu bar doesn't own it
+        bar.setCornerWidget(self.zoom_box, Qt.TopRightCorner)
 
         help_menu = bar.addMenu("&Help")
         self._action(help_menu, "Check for updates...", self.updates.check_now)

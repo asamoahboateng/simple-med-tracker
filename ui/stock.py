@@ -1,36 +1,35 @@
 """ui/stock.py - Stock & Batches: medicine stock levels and every batch."""
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QLineEdit, QSplitter, QWidget,
 )
 
 import logic
 from ui.edit_batch import EditBatchDialog
+from ui.medicine import EditMedicineDialog
 from ui.models import (
     STATUS_COLOURS, Column, RecordTableModel, TableProxy, int_fmt, make_table, use_pills,
 )
-from ui.widgets import (
-    Card, hint_label, make_button, page_header, page_layout, show_error,
-)
+from ui.widgets import Card, focus_key, hint_label, leads_into, make_button, page_header, page_layout
 
 MEDICINE_COLUMNS = [
-    Column("name", "Medicine", editable=True),
-    Column("unit", "Unit", editable=True),
-    Column("reorder_level", "Reorder level", "right", int_fmt, editable=True),
+    Column("name", "Medicine"),
+    Column("unit", "Unit"),
+    Column("reorder_level", "Reorder level", "right", int_fmt),
     Column("received", "Total received", "right", int_fmt),
     Column("dispensed", "Total dispensed", "right", int_fmt),
     Column("removed", "Total removed", "right", int_fmt),
     Column("stock", "Current stock", "right", int_fmt),
     Column("status", "Status", "center"),
-    Column("nearest_expiry", "Nearest expiry"),
-    Column("note", "Note", editable=True),
+    Column("nearest_expiry", "Nearest expiry", fmt=logic.expiry_label),
+    Column("note", "Note"),
 ]
 
 BATCH_COLUMNS = [
     Column("medicine", "Medicine"),
     Column("batch_no", "Batch No"),
-    Column("expiry", "Expiry"),
+    Column("expiry", "Expiry", fmt=logic.expiry_label),
     Column("received", "Received", "right", int_fmt),
     Column("dispensed", "Dispensed", "right", int_fmt),
     Column("removed", "Removed", "right", int_fmt),
@@ -52,12 +51,13 @@ EXPIRY_FILTERS = [
 ]
 
 
-def _search_box(placeholder: str, proxy: TableProxy) -> QLineEdit:
+def _search_box(placeholder: str, proxy: TableProxy, view) -> QLineEdit:
     box = QLineEdit()
     box.setPlaceholderText(placeholder)
     box.setClearButtonEnabled(True)
     box.setMinimumWidth(240)
     box.textChanged.connect(proxy.setFilterFixedString)
+    leads_into(box, view)
     return box
 
 
@@ -73,17 +73,19 @@ class StockPage(QWidget):
 
         # --- medicines ---
         self.med_model = RecordTableModel(MEDICINE_COLUMNS)
-        self.med_model.edit_fn = self._save_edit
         self.med_proxy = TableProxy()
         self.med_view = make_table(self.med_model, self.med_proxy)
         self.med_view.sortByColumn(0, Qt.AscendingOrder)
         use_pills(self.med_view, MEDICINE_COLUMNS, "status")
+        self.med_view.setEditTriggers(self.med_view.EditTrigger.NoEditTriggers)
+        self.med_view.doubleClicked.connect(self._edit_medicine)
 
         med_card = Card("Medicines")
-        edit_hint = hint_label("   Double-click Medicine, Unit, Reorder level or Note to edit")
+        edit_hint = hint_label("   Double-click or press Enter to edit a medicine \u00b7 Alt+M")
         edit_hint.setWordWrap(False)
         med_card.header.insertWidget(1, edit_hint)
-        med_card.header.addWidget(_search_box("\U0001F50D  Search medicines", self.med_proxy))
+        self.med_search = _search_box("\U0001F50D  Search medicines", self.med_proxy, self.med_view)
+        med_card.header.addWidget(self.med_search)
         med_card.body.addWidget(self.med_view)
 
         # --- batches ---
@@ -105,14 +107,15 @@ class StockPage(QWidget):
         self.batch_view.doubleClicked.connect(self._edit_batch)
 
         batch_card = Card("Batches")
-        batch_hint = hint_label("   Double-click a batch to edit it")
+        batch_hint = hint_label("   Double-click or press Enter to edit a batch \u00b7 Alt+B")
         batch_hint.setWordWrap(False)
         batch_card.header.insertWidget(1, batch_hint)
         batch_card.header.addWidget(self.hide_used)
         batch_card.header.addSpacing(8)
         batch_card.header.addWidget(self.expiry_filter)
         batch_card.header.addSpacing(8)
-        batch_card.header.addWidget(_search_box("\U0001F50D  Search batches", self.batch_proxy))
+        self.batch_search = _search_box("\U0001F50D  Search batches", self.batch_proxy, self.batch_view)
+        batch_card.header.addWidget(self.batch_search)
         batch_card.body.addWidget(self.batch_view)
 
         splitter = QSplitter(Qt.Vertical)
@@ -131,6 +134,18 @@ class StockPage(QWidget):
             units_btn, new_btn))
         layout.addWidget(splitter, 1)
 
+        # Keyboard: Tab goes search -> medicines -> batch filters -> batch search -> batches.
+        self.med_view.setAccessibleName("Medicines")
+        self.batch_view.setAccessibleName("Batches")
+        for widget_a, widget_b in ((self.med_search, self.med_view), (self.med_view, self.hide_used),
+                                   (self.hide_used, self.expiry_filter),
+                                   (self.expiry_filter, self.batch_search),
+                                   (self.batch_search, self.batch_view)):
+            QWidget.setTabOrder(widget_a, widget_b)
+        focus_key(self, "Alt+M", self.med_view)
+        focus_key(self, "Alt+B", self.batch_view)
+        focus_key(self, "Alt+S", self.med_search)
+
     def refresh(self):
         self.med_model.set_rows(logic.medicine_rows(self.conn))
         self.batch_model.set_rows(logic.batch_rows(self.conn))
@@ -139,7 +154,8 @@ class StockPage(QWidget):
         if self.hide_used.isChecked() and row["status"] == logic.BATCH_USED_UP:
             return False
         test = self.expiry_filter.currentData()
-        return test is None or test(row["days_to_expiry"])
+        days = row["days_to_expiry"]          # None = never expires: only under "Any expiry"
+        return test is None or (days is not None and test(days))
 
     @staticmethod
     def _batch_colour(row: dict, key: str):
@@ -149,25 +165,11 @@ class StockPage(QWidget):
             return STATUS_COLOURS.get(row["status"])
         return None
 
-    def _save_edit(self, row: dict, key: str, value) -> bool:
-        """Called when the user edits Medicine, Unit, Reorder level or Note in the table."""
-        try:
-            if key == "name":
-                logic.rename_medicine(self.conn, row["id"], value)
-            elif key == "unit":
-                logic.update_medicine_settings(self.conn, row["id"], unit=value)
-            elif key == "reorder_level":
-                logic.update_medicine_settings(self.conn, row["id"], reorder_level=value)
-            elif key == "note":
-                logic.update_medicine_settings(self.conn, row["id"], note=value)
-            else:
-                return False
-        except logic.ValidationError as exc:
-            show_error(self, str(exc))
-            return False
-        # Refresh everything after the editor has closed (not in the middle of editing).
-        QTimer.singleShot(0, self.data_changed.emit)
-        return True
+    def _edit_medicine(self, index):
+        """Double-clicking a medicine opens the Edit Medicine pop-up."""
+        row = self.med_model.row_dict(self.med_proxy.mapToSource(index).row())
+        if EditMedicineDialog(self.conn, row, self).exec():
+            self.data_changed.emit()
 
     def _edit_batch(self, index):
         """Double-clicking a batch opens the Edit Batch pop-up."""

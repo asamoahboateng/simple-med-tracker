@@ -1,7 +1,7 @@
 """ui/edit_batch.py - The "Edit Batch" dialog (batch number, expiry and quantity received)."""
 
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout,
+    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout,
 )
 
 import logic
@@ -24,7 +24,11 @@ class EditBatchDialog(QDialog):
         out = int(batch["dispensed"]) + int(batch["removed"])
 
         self.batch_edit = QLineEdit(batch["batch_no"])
-        self.expiry_edit = make_date_edit(logic.to_date(batch["expiry"]))
+        never = not logic.has_expiry(batch["expiry"])
+        self.expiry_edit = make_date_edit(None if never else logic.to_date(batch["expiry"]))
+        self.no_expiry = QCheckBox("No expiry date")
+        self.no_expiry.toggled.connect(lambda on: self.expiry_edit.setEnabled(not on))
+        self.no_expiry.setChecked(never)
 
         # The received quantity is one delivery's entry, so it can only be
         # changed here when the batch came in a single delivery.
@@ -42,6 +46,7 @@ class EditBatchDialog(QDialog):
         form.addRow("Medicine:", QLabel(batch["medicine"]))
         form.addRow("Batch number:", self.batch_edit)
         form.addRow("Expiry date:", self.expiry_edit)
+        form.addRow("", self.no_expiry)
         form.addRow("Quantity received:", self.received_spin)
         if not self.single_delivery:
             note = QLabel(f"Received in {batch['deliveries']} deliveries. To change a quantity, "
@@ -87,7 +92,7 @@ class EditBatchDialog(QDialog):
         try:
             logic.edit_batch(
                 self.conn, self.batch["id"], self.batch_edit.text(),
-                to_py_date(self.expiry_edit.date()),
+                None if self.no_expiry.isChecked() else to_py_date(self.expiry_edit.date()),
                 received=received if changed_received else None,
                 changed_by=self.changed_by, reason=self.reason_edit.text())
         except logic.ValidationError as exc:

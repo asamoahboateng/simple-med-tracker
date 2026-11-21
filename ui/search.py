@@ -1,6 +1,7 @@
 """ui/search.py - Search: find a medicine, then see its details, batches and log."""
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
 )
@@ -11,10 +12,10 @@ from ui.edit_batch import EditBatchDialog
 from ui.edit_entry import DeleteEntryDialog, EditEntryDialog
 from ui.log import LOG_COLUMNS
 from ui.models import STATUS_COLOURS, Column, RecordTableModel, TableProxy, int_fmt, make_table, use_pills
-from ui.responsive import FlowGrid
 from ui.stock import BATCH_COLUMNS
 from ui.widgets import (
-    Card, SummaryCard, hint_label, make_button, page_header, page_layout, show_info,
+    Card, StatStrip, focus_key, hint_label, leads_into, make_button, on_key, page_header, page_layout,
+    show_info,
 )
 
 RESULT_COLUMNS = [
@@ -59,7 +60,7 @@ class SearchPage(QWidget):
         self.empty = QLabel("Search for a medicine and click it to see its details and log.")
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
-        self.empty.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 15px;")
+        self.empty.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: {theme.px(15)}px;")
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.empty)
@@ -79,10 +80,39 @@ class SearchPage(QWidget):
 
         self.search.textChanged.connect(self._load_results)
         self.result_view.selectionModel().currentRowChanged.connect(self._result_chosen)
+        self._keyboard()
+
+    def _keyboard(self):
+        """
+        Search box -> medicines -> log -> Delete entry -> batches with Tab.
+        Down / Enter go forward a step, Esc goes back, Alt+S/M/L/B jump straight there.
+        """
+        self.result_view.setAccessibleName("Medicines found")
+        self.log_view.setAccessibleName("Log entries")
+        self.batch_view.setAccessibleName("Batches")
+        leads_into(self.search, self.result_view)
+        self.result_view.doubleClicked.connect(lambda _index: self._focus_log())
+        on_key(self.log_view, QKeySequence.Delete, self._delete_entry)
+        for view, back in ((self.result_view, self.search), (self.log_view, self.result_view),
+                           (self.batch_view, self.result_view)):
+            on_key(view, Qt.Key_Escape, lambda b=back: b.setFocus(Qt.OtherFocusReason))
+        for keys, target in (("Alt+S", self.search), ("Alt+M", self.result_view),
+                             ("Alt+L", self.log_view), ("Alt+B", self.batch_view)):
+            focus_key(self, keys, target)
+        QWidget.setTabOrder(self.search, self.result_view)
+        QWidget.setTabOrder(self.result_view, self.log_view)
+        QWidget.setTabOrder(self.log_view, self.delete_btn)
+        QWidget.setTabOrder(self.delete_btn, self.batch_view)
+
+    def _focus_log(self):
+        """From the chosen medicine to its log (or its batches when there is no log)."""
+        if self.stack.currentIndex() == 1:
+            target = self.log_view if self.log_model.rowCount() else self.batch_view
+            target.setFocus(Qt.OtherFocusReason)
 
     def _build_details(self) -> QWidget:
         self.name_label = QLabel()
-        self.name_label.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {theme.TEXT};")
+        self.name_label.setStyleSheet(f"font-size: {theme.px(22)}px; font-weight: 700; color: {theme.TEXT};")
         self.status_label = QLabel()
         self.facts_label = QLabel()
         self.facts_label.setStyleSheet(f"color: {theme.TEXT_MUTED};")
@@ -97,13 +127,13 @@ class SearchPage(QWidget):
         title_row.addWidget(self.status_label)
         title_row.addStretch()
 
-        self.stock_card = SummaryCard("Current stock", theme.PRIMARY)
-        self.received_card = SummaryCard("Total received", theme.GREEN)
-        self.dispensed_card = SummaryCard("Total dispensed", theme.BLUE)
-        self.removed_card = SummaryCard("Total removed", theme.PURPLE)
-        self.expiry_card = SummaryCard("Nearest expiry", theme.AMBER)
-        tiles = FlowGrid([self.stock_card, self.received_card, self.dispensed_card,
-                          self.removed_card, self.expiry_card], min_item_width=150)
+        self.stats = StatStrip([
+            ("stock", "Current stock", theme.PRIMARY),
+            ("received", "Total received", theme.GREEN),
+            ("dispensed", "Total dispensed", theme.BLUE),
+            ("removed", "Total removed", theme.PURPLE),
+            ("expiry", "Nearest expiry", theme.AMBER),
+        ])
 
         self.log_model = RecordTableModel(DETAIL_LOG_COLUMNS)
         self.log_view = make_table(self.log_model, TableProxy())
@@ -111,12 +141,13 @@ class SearchPage(QWidget):
         use_pills(self.log_view, DETAIL_LOG_COLUMNS, "type")
         self.log_view.doubleClicked.connect(self._edit_entry)
         self.log_card = Card("Log")
-        log_hint = hint_label("   Double-click an entry to correct its quantity")
+        log_hint = hint_label("   Double-click or press Enter to correct an entry \u00b7 Alt+L")
         log_hint.setWordWrap(False)
         self.log_card.header.insertWidget(1, log_hint)
-        delete_btn = make_button("Delete entry", "danger", icon_text="\u2716")
-        delete_btn.clicked.connect(self._delete_entry)
-        self.log_card.header.addWidget(delete_btn)
+        self.delete_btn = make_button("Delete entry", "danger", icon_text="\u2716")
+        self.delete_btn.setToolTip("Delete the selected entry (Delete key)")
+        self.delete_btn.clicked.connect(self._delete_entry)
+        self.log_card.header.addWidget(self.delete_btn)
         self.log_card.body.addWidget(self.log_view)
 
         self.batch_model = RecordTableModel(DETAIL_BATCH_COLUMNS)
@@ -125,7 +156,7 @@ class SearchPage(QWidget):
         use_pills(self.batch_view, DETAIL_BATCH_COLUMNS, "status")
         self.batch_view.doubleClicked.connect(self._edit_batch)
         self.batch_card = Card("Batches")
-        batch_hint = hint_label("   Double-click a batch to edit its number, expiry or quantity received")
+        batch_hint = hint_label("   Double-click or press Enter to edit a batch \u00b7 Alt+B")
         batch_hint.setWordWrap(False)
         self.batch_card.header.insertWidget(1, batch_hint)
         self.batch_card.body.addWidget(self.batch_view)
@@ -143,7 +174,7 @@ class SearchPage(QWidget):
         col.addLayout(title_row)
         col.addWidget(self.facts_label)
         col.addWidget(self.note_label)
-        col.addWidget(tiles)
+        col.addWidget(self.stats)
         col.addWidget(tables, 1)
         return details
 
@@ -188,12 +219,9 @@ class SearchPage(QWidget):
         self.note_label.setText(f"Note: {med['note']}" if med["note"] else "")
         self.note_label.setVisible(bool(med["note"]))
 
-        self.stock_card.set_value(med["stock"], unit)
-        self.received_card.set_value(med["received"], unit)
-        self.dispensed_card.set_value(med["dispensed"], unit)
-        self.removed_card.set_value(med["removed"], unit)
-        self.expiry_card.set_value(med["nearest_expiry"] or "-",
-                                   "" if med["nearest_expiry"] else "No stock left")
+        for key in ("stock", "received", "dispensed", "removed"):
+            self.stats.set_value(key, f"{int(med[key]):,} {unit}")
+        self.stats.set_value("expiry", logic.expiry_label(med["nearest_expiry"]) or "No stock left")
 
         log = logic.medicine_log(self.conn, medicine_id)
         batches = logic.medicine_batches(self.conn, medicine_id)

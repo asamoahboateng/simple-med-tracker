@@ -119,7 +119,7 @@ class ReportPage(QWidget):
         self.month_label = QLabel()
         self.month_label.setAlignment(Qt.AlignCenter)
         self.month_label.setMinimumWidth(150)
-        self.month_label.setStyleSheet("font-weight: 800; font-size: 15px; background: transparent;")
+        self.month_label.setStyleSheet(f"font-weight: 800; font-size: {theme.px(15)}px; background: transparent;")
         for button, delta, name in ((self.prev_btn, -1, "Previous month"),
                                     (self.next_btn, 1, "Next month")):
             button.setProperty("kind", "stepper")
@@ -532,7 +532,7 @@ class ReportPage(QWidget):
         self.rank_view.sortByColumn(0, Qt.AscendingOrder)
         self.rank_view.setColumnWidth(3, 220)       # room for the share bar
         rows = min(len(r.medicines), TABLE_LIMIT)
-        self.rank_view.setFixedHeight(44 + max(rows, 1) * 36 + 4)
+        self.rank_view.setFixedHeight(theme.px(44) + max(rows, 1) * theme.px(36) + 4)
         note = (f"Ranked by units dispensed {self.noun}. Share is each medicine's part of the "
                 f"{r.total_dispensed:,} units. Medicines that were only received are listed last.")
         if len(r.medicines) > TABLE_LIMIT:

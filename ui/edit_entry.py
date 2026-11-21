@@ -18,7 +18,7 @@ def entry_details(row: dict) -> QFormLayout:
     form.addRow("Medicine:", QLabel(row["medicine"]))
     form.addRow("Type:", QLabel(logic.TYPE_NAMES[row["type"]]))
     form.addRow("Date:", QLabel(row["date"]))
-    form.addRow("Batch:", QLabel(f"{row['batch_no']}  (expires {row['expiry']})"))
+    form.addRow("Batch:", QLabel(f"{row['batch_no']}  ({logic.expiry_phrase(row['expiry'])})"))
     if row["type"] == logic.DISPENSED:
         form.addRow("Patient ID:", QLabel(row["patient_id"] or "-"))
         form.addRow("Prescriber:", QLabel(row["prescriber"] or "-"))

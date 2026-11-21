@@ -88,7 +88,7 @@ class RemoveStockDialog(QDialog):
         for b in batches:
             expired = "  -  EXPIRED" if logic.is_expired_on(b.expiry, today) else ""
             self.batch_combo.addItem(
-                f"{b.batch_no}  -  expires {b.expiry.isoformat()}  -  {b.remaining:,} left{expired}",
+                f"{b.batch_no}  -  {logic.expiry_phrase(b.expiry)}  -  {b.remaining:,} left{expired}",
                 b.batch_no)
         self.batch_combo.blockSignals(False)
 
@@ -119,7 +119,7 @@ class RemoveStockDialog(QDialog):
             show_error(self, str(exc), title="Cannot save")
             return
 
-        used = "\n".join(f"  - Batch {a.batch_no} (exp {a.expiry.isoformat()}): {a.quantity:,}"
+        used = "\n".join(f"  - Batch {a.batch_no} ({logic.expiry_phrase(a.expiry)}): {a.quantity:,}"
                          for a in result.allocations)
         QMessageBox.information(
             self, "Saved",

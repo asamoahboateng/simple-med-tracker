@@ -3,7 +3,7 @@
 from datetime import date
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QBoxLayout, QComboBox, QCompleter, QDateEdit, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
     QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
@@ -187,7 +187,7 @@ class SummaryCard(QFrame):
             self.badge.setFixedSize(44, 44)
             self.badge.setAlignment(Qt.AlignCenter)
             self.badge.setStyleSheet(f"background: {theme.tint(accent, 0.14)}; border-radius: 12px;"
-                                     f" font-size: 20px;")
+                                     f" font-size: {theme.px(20)}px;")
             self.layout_.addWidget(self.badge, 0, Qt.AlignTop)
         self._size_class = None
 
@@ -202,12 +202,56 @@ class SummaryCard(QFrame):
         if size_class != self._size_class:
             self._size_class = size_class
             value_px = {"wide": 30, "medium": 25, "narrow": 22}[size_class]
-            self.value_label.setStyleSheet(f"font-size: {value_px}px;")
+            self.value_label.setStyleSheet(f"font-size: {theme.px(value_px)}px;")
             margin = 18 if size_class == "wide" else 12
             self.layout_.setContentsMargins(margin, 14, margin - 2, 14)
             if self.badge is not None:
                 self.badge.setVisible(size_class != "narrow")
         super().resizeEvent(event)
+
+
+class StatStrip(QFrame):
+    """
+    A compact one-line row of figures, like a single-row table: each column has
+    a small title, a value and its own coloured top border.
+
+    items: (key, title, accent colour). Set a figure with set_value(key, value).
+    """
+
+    def __init__(self, items: list[tuple[str, str, str]], parent=None):
+        super().__init__(parent)
+        self.setObjectName("card")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        add_shadow(self, blur=16)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 8, 8, 8)
+        row.setSpacing(0)
+        self.values: dict[str, QLabel] = {}
+        for i, (key, title, accent) in enumerate(items):
+            cell = QFrame()
+            cell.setObjectName("statCell")
+            divider = f" border-left: 1px solid {theme.BORDER};" if i else ""
+            cell.setStyleSheet(f"QFrame#statCell {{ border: none; border-top: 3px solid {accent};"
+                               f"{divider} }}")
+            title_label = QLabel(title)
+            title_label.setObjectName("cardTitle")
+            value_label = QLabel("-")
+            value_label.setStyleSheet(f"color: {theme.TEXT}; font-size: {theme.px(17)}px; font-weight: 700;")
+            for label in (title_label, value_label):
+                label.setMinimumWidth(0)
+                label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            col = QVBoxLayout(cell)
+            col.setContentsMargins(12, 6, 10, 4)
+            col.setSpacing(0)
+            col.addWidget(title_label)
+            col.addWidget(value_label)
+            row.addWidget(cell, 1)
+            self.values[key] = value_label
+
+    def set_value(self, key: str, value) -> None:
+        label = self.values[key]
+        label.setText(f"{value:,}" if isinstance(value, int) else str(value))
+        label.setToolTip(label.text())
 
 
 def make_button(text: str, kind: str = "", large: bool = False, icon_text: str = "") -> QPushButton:
@@ -280,6 +324,32 @@ def section_title(text: str) -> QLabel:
     return label
 
 
+# --------------------------------------------------------------------------
+# Keyboard
+# --------------------------------------------------------------------------
+
+def on_key(widget: QWidget, keys, slot, context=Qt.WidgetShortcut) -> QShortcut:
+    """Run slot when keys are pressed while widget has focus (or, with
+    Qt.WindowShortcut, anywhere while widget is on screen)."""
+    shortcut = QShortcut(QKeySequence(keys), widget)
+    shortcut.setContext(context)
+    shortcut.activated.connect(slot)
+    return shortcut
+
+
+def focus_key(page: QWidget, keys: str, target: QWidget) -> None:
+    """A shortcut that jumps to target while page is showing (e.g. Alt+L to the log)."""
+    on_key(page, keys, lambda: target.setFocus(Qt.ShortcutFocusReason), Qt.WindowShortcut)
+    tip = target.toolTip()
+    target.setToolTip(f"{tip}  ({keys})" if tip else f"Shortcut: {keys}")
+
+
+def leads_into(search_box: QWidget, view: QWidget) -> None:
+    """Down arrow or Enter in a search box moves into the table below it."""
+    on_key(search_box, Qt.Key_Down, lambda: view.setFocus(Qt.OtherFocusReason))
+    search_box.returnPressed.connect(lambda: view.setFocus(Qt.OtherFocusReason))
+
+
 def hint_label(text: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName("hint")
@@ -316,12 +386,12 @@ def dialog_header(title: str, subtitle: str, icon: str, accent: str) -> QWidget:
     badge = QLabel(icon)
     badge.setFixedSize(40, 40)
     badge.setAlignment(Qt.AlignCenter)
-    badge.setStyleSheet(f"background: {accent}; border-radius: 10px; font-size: 20px;"
+    badge.setStyleSheet(f"background: {accent}; border-radius: 10px; font-size: {theme.px(20)}px;"
                         f" font-weight: 700; color: white;")
     texts = QVBoxLayout()
     texts.setSpacing(0)
     title_label = QLabel(title)
-    title_label.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {theme.TEXT};")
+    title_label.setStyleSheet(f"font-size: {theme.px(17)}px; font-weight: 700; color: {theme.TEXT};")
     sub = QLabel(subtitle)
     sub.setStyleSheet(f"color: {theme.TEXT_MUTED};")
     sub.setWordWrap(True)
