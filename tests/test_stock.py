@@ -111,6 +111,19 @@ def test_rename_medicine_keeps_history(conn, add, give):
     assert {r["medicine"] for r in logic.log_rows(conn)} == {"Paracetamol 500mg"}
 
 
+def test_edit_medicine_saves_everything_or_nothing(conn, add):
+    add(name="Ibuprofen")
+    med = db.find_medicine(conn, "Ibuprofen")
+    logic.edit_medicine(conn, med["id"], "Ibuprofen 400mg", "packs", 25, "Take with food")
+    saved = db.get_medicine(conn, med["id"])
+    assert (saved["name"], saved["unit"], saved["reorder_level"], saved["note"]) == \
+        ("Ibuprofen 400mg", "packs", 25, "Take with food")
+    # A bad reorder level must not leave the new name behind.
+    with pytest.raises(logic.ValidationError):
+        logic.edit_medicine(conn, med["id"], "Ibuprofen 200mg", "packs", -1, "")
+    assert db.get_medicine(conn, med["id"])["name"] == "Ibuprofen 400mg"
+
+
 def test_rename_medicine_allows_case_change_but_not_duplicates(conn, add):
     add(name="Ibuprofen")
     add(name="Amoxicillin")

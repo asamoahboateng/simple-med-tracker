@@ -705,10 +705,24 @@ def rename_medicine(conn, medicine_id: int, new_name) -> None:
     """Rename a medicine. Its history follows it, since transactions link by id."""
     new_name = require_text(new_name, "Medicine name")
     with db.transaction(conn):
-        existing = db.find_medicine(conn, new_name)
-        if existing is not None and existing["id"] != medicine_id:
-            raise ValidationError(f"'{existing['name']}' already exists.")
-        db.update_medicine(conn, medicine_id, name=new_name)
+        _rename_medicine(conn, medicine_id, new_name)
+
+
+def _rename_medicine(conn, medicine_id: int, new_name: str) -> None:
+    """rename_medicine() inside a transaction the caller has already started."""
+    existing = db.find_medicine(conn, new_name)
+    if existing is not None and existing["id"] != medicine_id:
+        raise ValidationError(f"'{existing['name']}' already exists.")
+    db.update_medicine(conn, medicine_id, name=new_name)
+
+
+def edit_medicine(conn, medicine_id: int, name, unit, reorder_level, note) -> None:
+    """Change a medicine's name, unit, reorder level and note together: all or nothing."""
+    name = require_text(name, "Medicine name")
+    with db.transaction(conn):
+        _rename_medicine(conn, medicine_id, name)
+        update_medicine_settings(conn, medicine_id, unit=unit, reorder_level=reorder_level,
+                                 note=note)
 
 
 def update_batch(conn, batch_id: int, batch_no=None, expiry_date=None) -> None:

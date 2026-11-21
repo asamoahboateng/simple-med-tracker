@@ -105,13 +105,10 @@ class EditMedicineDialog(QDialog):
         layout.addWidget(buttons)
 
     def save(self):
-        med = self.medicine
         try:
-            if self.name_edit.text().strip() != med["name"]:
-                logic.rename_medicine(self.conn, med["id"], self.name_edit.text())
-            logic.update_medicine_settings(self.conn, med["id"], unit=self.unit_combo.currentText(),
-                                           reorder_level=self.reorder_spin.value(),
-                                           note=self.note_edit.text())
+            logic.edit_medicine(self.conn, self.medicine["id"], self.name_edit.text(),
+                                self.unit_combo.currentText(), self.reorder_spin.value(),
+                                self.note_edit.text())
         except logic.ValidationError as exc:
             show_error(self, str(exc))
             return
