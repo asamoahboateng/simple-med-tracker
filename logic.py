@@ -725,6 +725,30 @@ def edit_medicine(conn, medicine_id: int, name, unit, reorder_level, note) -> No
                                  note=note)
 
 
+def can_delete_medicine(conn, medicine_id: int) -> bool:
+    """True when the medicine has no stock and nothing in the log."""
+    return db.medicine_entry_count(conn, medicine_id) == 0
+
+
+def delete_medicine(conn, medicine_id: int) -> str:
+    """
+    Delete a medicine that has no stock and nothing in the log (e.g. added by mistake).
+    Returns its name. Medicines with history can't be deleted: the log would lose it.
+    """
+    with db.transaction(conn):
+        medicine = db.get_medicine(conn, medicine_id)
+        if medicine is None:
+            raise ValidationError("That medicine no longer exists.")
+        entries = db.medicine_entry_count(conn, medicine_id)
+        if entries:
+            raise ValidationError(
+                f"'{medicine['name']}' can't be deleted because it has {entries:,} "
+                f"{'entry' if entries == 1 else 'entries'} in the log. Only a medicine with no "
+                f"stock and nothing in the log can be deleted.")
+        db.delete_medicine(conn, medicine_id)
+    return medicine["name"]
+
+
 def update_batch(conn, batch_id: int, batch_no=None, expiry_date=None) -> None:
     """Correct a batch's number and/or expiry date. Applies to all its stock."""
     if batch_no is not None:

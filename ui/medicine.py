@@ -1,13 +1,15 @@
-"""ui/medicine.py - The "New Medicine" dialog (adds a medicine with no stock yet)."""
+"""ui/medicine.py - The "New Medicine" and "Edit Medicine" dialogs (edit can also delete)."""
 
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout,
+    QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout,
 )
 
 import logic
 from ui import theme
 from ui.units import unit_picker
-from ui.widgets import dialog_header, show_error, show_info, style_dialog_buttons
+from ui.widgets import (
+    ask_yes_no, dialog_header, make_button, show_error, show_info, style_dialog_buttons,
+)
 
 
 class NewMedicineDialog(QDialog):
@@ -94,6 +96,19 @@ class EditMedicineDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
         buttons.rejected.connect(self.reject)
+        # Only a medicine with no stock and nothing in the log can go (e.g. added by mistake).
+        self.delete_button = make_button("Delete medicine", "danger")
+        self.delete_button.clicked.connect(self.delete_medicine)
+        if logic.can_delete_medicine(conn, medicine["id"]):
+            self.delete_button.setToolTip("Delete this medicine (it has no stock and nothing in the log)")
+        else:
+            self.delete_button.setEnabled(False)
+            self.delete_button.setToolTip("A medicine can only be deleted when it has no stock and "
+                                          "nothing in the log.")
+        button_row = QHBoxLayout()                 # Delete on its own at the left, away from Save
+        button_row.addWidget(self.delete_button)
+        button_row.addStretch(1)
+        button_row.addWidget(buttons)
 
         style_dialog_buttons(buttons)
         layout = QVBoxLayout(self)
@@ -102,7 +117,7 @@ class EditMedicineDialog(QDialog):
         layout.addWidget(dialog_header("Edit Medicine", "Change the name, unit, reorder level or note",
                                        "✎", theme.PRIMARY))
         layout.addLayout(form)
-        layout.addWidget(buttons)
+        layout.addLayout(button_row)
 
     def save(self):
         try:
@@ -112,4 +127,18 @@ class EditMedicineDialog(QDialog):
         except logic.ValidationError as exc:
             show_error(self, str(exc))
             return
+        self.accept()
+
+    def delete_medicine(self):
+        name = self.medicine["name"]
+        if not ask_yes_no(self, f"Delete '{name}'?\n\nIt has no stock and nothing in the log. "
+                          f"This cannot be undone.", title="Delete medicine",
+                          yes_text="Delete", no_text="Cancel"):
+            return
+        try:
+            logic.delete_medicine(self.conn, self.medicine["id"])
+        except logic.ValidationError as exc:
+            show_error(self, str(exc))
+            return
+        show_info(self, f"'{name}' was deleted.", title="Medicine deleted")
         self.accept()

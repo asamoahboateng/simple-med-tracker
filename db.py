@@ -267,6 +267,18 @@ def remove_unit(conn, name: str) -> None:
     conn.execute("DELETE FROM units WHERE name = ?", (name.strip(),))
 
 
+def medicine_entry_count(conn, medicine_id: int) -> int:
+    """How many log entries (transactions) a medicine has."""
+    return conn.execute("SELECT COUNT(*) FROM transactions WHERE medicine_id = ?",
+                        (medicine_id,)).fetchone()[0]
+
+
+def delete_medicine(conn, medicine_id: int) -> None:
+    """Delete a medicine and any empty batches. Only call it when it has no transactions."""
+    conn.execute("DELETE FROM batches WHERE medicine_id = ?", (medicine_id,))
+    conn.execute("DELETE FROM medicines WHERE id = ?", (medicine_id,))
+
+
 def medicines_using_unit(conn, name: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM medicines WHERE unit = ? COLLATE NOCASE",
                         (name.strip(),)).fetchone()[0]

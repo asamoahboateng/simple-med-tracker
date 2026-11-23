@@ -392,6 +392,9 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
   correct its number, expiry and the quantity received. The quantity received can only be changed
   there when the batch came in one delivery; otherwise correct each delivery in the log.
   Other values are calculated and can't be edited.
+- **Delete a medicine**: double-click it on Stock & Batches and click **Delete medicine**, then
+  confirm. Only a medicine with no stock and nothing in the log can be deleted (e.g. one added by
+  mistake); for any other the button is greyed out, so no history is ever lost.
 - **Colours**: **View → Colour theme** switches between Bottle green, Navy, Ocean blue, Teal,
   Plum and Charcoal. The change applies at once and is remembered on that computer. Red, amber
   and green keep their meaning (expired, expiring, OK) in every theme.
