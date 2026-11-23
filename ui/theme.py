@@ -29,38 +29,40 @@ RED_TINT = "#f8e3e0"
 PURPLE = "#7c5cd6"
 GREEN = "#3e7a5a"         # OK
 
-# Each preset: sidebar, its hover / border / text shades, main text and background.
+# Each preset: an accent, the sidebar and its hover / border / text shades, and main text.
+# The page background, hovers, table headers, scrollbars and focus rings are tinted from
+# the accent (see set_preset), so a preset recolours the whole window, not just the sidebar.
 # Every pair used together has at least 4.5:1 contrast.
 PRESETS = {
     "Bottle green": dict(
-        NAVY="#14332c", NAVY_HOVER="#1e463d", SIDEBAR_TEXT="#c9d8d3", SIDEBAR_MUTED="#a9bdb6",
+        ACCENT="#2e7d62", NAVY="#14332c", NAVY_HOVER="#1e463d", SIDEBAR_TEXT="#c9d8d3", SIDEBAR_MUTED="#a9bdb6",
         SIDEBAR_BORDER="#3a5e55", SIDEBAR_ACTIVE="#285a4e", TEXT="#14332c", TEXT_MUTED="#4e635d",
-        BG="#eef2f1", BORDER="#dde5e2", BORDER_STRONG="#c9d4d0", RULE="#e4eae8", SHELF="#d5dedb",
+        BORDER="#dde5e2", BORDER_STRONG="#c9d4d0", RULE="#e4eae8", SHELF="#d5dedb",
         BADGE_BG="#e2ebe8"),
     "Navy": dict(
-        NAVY="#0f2139", NAVY_HOVER="#1a3354", SIDEBAR_TEXT="#c6d2e3", SIDEBAR_MUTED="#8ea3bf",
+        ACCENT="#2c5aa0", NAVY="#0f2139", NAVY_HOVER="#1a3354", SIDEBAR_TEXT="#c6d2e3", SIDEBAR_MUTED="#8ea3bf",
         SIDEBAR_BORDER="#2b4a73", SIDEBAR_ACTIVE="#22406a", TEXT="#14213d", TEXT_MUTED="#4f5d75",
-        BG="#f1f4f9", BORDER="#dfe5ee", BORDER_STRONG="#cbd4e1", RULE="#e5eaf1", SHELF="#d4dce8",
+        BORDER="#dfe5ee", BORDER_STRONG="#cbd4e1", RULE="#e5eaf1", SHELF="#d4dce8",
         BADGE_BG="#e1e8f3"),
     "Ocean blue": dict(
-        NAVY="#173b6c", NAVY_HOVER="#22508e", SIDEBAR_TEXT="#d3e0f2", SIDEBAR_MUTED="#a7bddd",
+        ACCENT="#2f6fc0", NAVY="#173b6c", NAVY_HOVER="#22508e", SIDEBAR_TEXT="#d3e0f2", SIDEBAR_MUTED="#a7bddd",
         SIDEBAR_BORDER="#3a65a0", SIDEBAR_ACTIVE="#2b5c9e", TEXT="#142c4f", TEXT_MUTED="#4a5d78",
-        BG="#eff3f9", BORDER="#dce4ef", BORDER_STRONG="#c7d3e3", RULE="#e3e9f2", SHELF="#d1dbe9",
+        BORDER="#dce4ef", BORDER_STRONG="#c7d3e3", RULE="#e3e9f2", SHELF="#d1dbe9",
         BADGE_BG="#dfe8f5"),
     "Teal": dict(
-        NAVY="#0f3d44", NAVY_HOVER="#17525b", SIDEBAR_TEXT="#cde2e4", SIDEBAR_MUTED="#9cc0c4",
+        ACCENT="#1d8090", NAVY="#0f3d44", NAVY_HOVER="#17525b", SIDEBAR_TEXT="#cde2e4", SIDEBAR_MUTED="#9cc0c4",
         SIDEBAR_BORDER="#2f6b73", SIDEBAR_ACTIVE="#1f6670", TEXT="#11353b", TEXT_MUTED="#4a6367",
-        BG="#edf3f4", BORDER="#dbe6e8", BORDER_STRONG="#c5d6d9", RULE="#e2ebec", SHELF="#d0dfe1",
+        BORDER="#dbe6e8", BORDER_STRONG="#c5d6d9", RULE="#e2ebec", SHELF="#d0dfe1",
         BADGE_BG="#dcebed"),
     "Plum": dict(
-        NAVY="#3b1f3f", NAVY_HOVER="#4f2c54", SIDEBAR_TEXT="#e2d3e4", SIDEBAR_MUTED="#bfa6c2",
+        ACCENT="#8a4a92", NAVY="#3b1f3f", NAVY_HOVER="#4f2c54", SIDEBAR_TEXT="#e2d3e4", SIDEBAR_MUTED="#bfa6c2",
         SIDEBAR_BORDER="#6b4870", SIDEBAR_ACTIVE="#5f3964", TEXT="#2e1a31", TEXT_MUTED="#5f4e63",
-        BG="#f4f0f4", BORDER="#e6dee7", BORDER_STRONG="#d5c8d7", RULE="#ebe4ec", SHELF="#ddd2df",
+        BORDER="#e6dee7", BORDER_STRONG="#d5c8d7", RULE="#ebe4ec", SHELF="#ddd2df",
         BADGE_BG="#ece2ed"),
     "Charcoal": dict(
-        NAVY="#23272e", NAVY_HOVER="#333943", SIDEBAR_TEXT="#d3d7de", SIDEBAR_MUTED="#a4aab4",
+        ACCENT="#5a6372", NAVY="#23272e", NAVY_HOVER="#333943", SIDEBAR_TEXT="#d3d7de", SIDEBAR_MUTED="#a4aab4",
         SIDEBAR_BORDER="#4a515d", SIDEBAR_ACTIVE="#3f4651", TEXT="#1f2329", TEXT_MUTED="#545b66",
-        BG="#f1f2f4", BORDER="#e0e2e6", BORDER_STRONG="#cdd1d7", RULE="#e6e8eb", SHELF="#d6d9de",
+        BORDER="#e0e2e6", BORDER_STRONG="#cdd1d7", RULE="#e6e8eb", SHELF="#d6d9de",
         BADGE_BG="#e4e6ea"),
 }
 DEFAULT_PRESET = "Bottle green"
@@ -74,10 +76,22 @@ def set_preset(name: str) -> None:
         name = DEFAULT_PRESET
     current_preset = name
     globals().update(PRESETS[name])
-    globals().update(PRIMARY=NAVY, PRIMARY_HOVER=NAVY_HOVER)
+    accent = PRESETS[name]["ACCENT"]
+    globals().update(
+        PRIMARY=NAVY, PRIMARY_HOVER=NAVY_HOVER, FOCUS=accent,
+        BG=_wash(accent, 0.10), HOVER_BG=_wash(accent, 0.10), PRESSED_BG=_wash(accent, 0.18),
+        HEADER_BG=_wash(accent, 0.12), ALT_ROW=_wash(accent, 0.035), ROW_RULE=_wash(accent, 0.08),
+        DISABLED_BG=_wash(accent, 0.06), SCROLL=_wash(accent, 0.35), SCROLL_HOVER=_wash(accent, 0.5))
+
+
+def _wash(colour: str, amount: float) -> str:
+    """`colour` mixed into white: amount 0 is white, 1 is the colour itself."""
+    c = QColor(colour)
+    return "#" + "".join(f"{round(255 + (v - 255) * amount):02x}" for v in (c.red(), c.green(), c.blue()))
 
 
 set_preset(DEFAULT_PRESET)
+
 
 
 def _settings() -> QSettings:
@@ -194,7 +208,7 @@ def _stylesheet() -> str:
     QPushButton[kind="link"] {{ background: transparent; border: none; padding: 6px 0;
                                 color: {TEXT}; font-weight: 700; text-decoration: underline;
                                 text-align: left; }}
-    QPushButton[kind="link"]:hover {{ color: {GREEN}; }}
+    QPushButton[kind="link"]:hover {{ color: {FOCUS}; }}
     QPushButton[kind="outline"] {{ background: transparent; border: 2px solid {TEXT}; color: {TEXT};
                                    font-weight: 700; }}
     QPushButton[kind="outline"]:hover {{ background: {tint(TEXT, 0.06)}; }}
@@ -218,8 +232,8 @@ def _stylesheet() -> str:
     /* ---------- buttons ---------- */
     QPushButton {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {BORDER_STRONG};
                    border-radius: 8px; padding: 7px 16px; font-weight: 600; }}
-    QPushButton:hover {{ background: #eef3fb; border-color: #b8c5da; }}
-    QPushButton:pressed {{ background: #e2eaf6; }}
+    QPushButton:hover {{ background: {HOVER_BG}; border-color: {SCROLL}; }}
+    QPushButton:pressed {{ background: {PRESSED_BG}; }}
     QPushButton:default {{ border-color: {PRIMARY}; }}
     QPushButton[kind="primary"] {{ background: {PRIMARY}; color: white; border: none; }}
     QPushButton[kind="primary"]:hover {{ background: {PRIMARY_HOVER}; }}
@@ -234,7 +248,7 @@ def _stylesheet() -> str:
 
     /* ---------- keyboard focus ---------- */
     QPushButton:focus, QPushButton[kind="danger"]:focus, QPushButton[kind="outline"]:focus,
-    QPushButton[kind="chip"]:focus {{ border-color: {BLUE}; }}
+    QPushButton[kind="chip"]:focus {{ border-color: {FOCUS}; }}
     QPushButton[kind="primary"]:focus, QPushButton[kind="blue"]:focus, QPushButton[kind="link"]:focus,
     QPushButton[kind="segment"]:focus, QPushButton[kind="stepper"]:focus,
     QPushButton#sideAction:focus {{ text-decoration: underline; }}
@@ -253,7 +267,7 @@ def _stylesheet() -> str:
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus
         {{ border: 1.5px solid {PRIMARY}; }}
     QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDateEdit:disabled
-        {{ background: #f0f2f6; color: #9aa5b5; }}
+        {{ background: {DISABLED_BG}; color: #9aa5b5; }}
     QComboBox::drop-down, QDateEdit::drop-down {{ border: none; width: 26px; }}
     QComboBox::down-arrow, QDateEdit::down-arrow {{ image: url("{down}"); width: 12px; height: 12px; }}
     QSpinBox::up-button, QSpinBox::down-button {{ border: none; width: 20px; background: transparent; }}
@@ -273,31 +287,31 @@ def _stylesheet() -> str:
     QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {PRIMARY}; }}
 
     /* ---------- tables ---------- */
-    QTableView {{ background: {SURFACE}; alternate-background-color: #f9fafd;
+    QTableView {{ background: {SURFACE}; alternate-background-color: {ALT_ROW};
                   border: 1px solid {BORDER}; border-radius: 12px; gridline-color: transparent;
                   selection-background-color: {tint(PRIMARY, 0.14)}; selection-color: {TEXT}; }}
-    QTableView::item {{ padding: 0 8px; border-bottom: 1px solid #f0f2f7; }}
+    QTableView::item {{ padding: 0 8px; border-bottom: 1px solid {ROW_RULE}; }}
     QHeaderView {{ background: transparent; }}
-    QHeaderView::section {{ background: #f6f8fc; color: #52607a; font-weight: 700; font-size: 12px;
+    QHeaderView::section {{ background: {HEADER_BG}; color: {TEXT_MUTED}; font-weight: 700; font-size: 12px;
                             border: none; border-bottom: 1px solid {BORDER}; padding: 9px 8px; }}
     QHeaderView::section:first {{ border-top-left-radius: 12px; }}
     QHeaderView::section:last {{ border-top-right-radius: 12px; }}
-    QTableCornerButton::section {{ background: #f6f8fc; border: none; }}
+    QTableCornerButton::section {{ background: {HEADER_BG}; border: none; }}
 
 
     /* ---------- misc ---------- */
     QSplitter::handle {{ background: transparent; height: 10px; }}
     QScrollBar:vertical {{ background: transparent; width: 11px; margin: 2px; }}
-    QScrollBar::handle:vertical {{ background: #c9d2df; border-radius: 4px; min-height: 30px; }}
-    QScrollBar::handle:vertical:hover {{ background: #aab6c8; }}
+    QScrollBar::handle:vertical {{ background: {SCROLL}; border-radius: 4px; min-height: 30px; }}
+    QScrollBar::handle:vertical:hover {{ background: {SCROLL_HOVER}; }}
     QScrollBar:horizontal {{ background: transparent; height: 11px; margin: 2px; }}
-    QScrollBar::handle:horizontal {{ background: #c9d2df; border-radius: 4px; min-width: 30px; }}
+    QScrollBar::handle:horizontal {{ background: {SCROLL}; border-radius: 4px; min-width: 30px; }}
     QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
     QScrollArea#sidebarScroll QScrollBar::handle:vertical {{ background: {SIDEBAR_BORDER}; }}
     QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
-    QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; color: {TEXT_MUTED}; }}
+    QStatusBar {{ background: {HEADER_BG}; border-top: 1px solid {BORDER}; color: {TEXT_MUTED}; }}
     QStatusBar QLabel {{ color: {TEXT_MUTED}; padding: 2px 6px; }}
-    QMenuBar {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
+    QMenuBar {{ background: {HEADER_BG}; border-bottom: 1px solid {BORDER}; }}
     QMenuBar::item {{ padding: 5px 10px; background: transparent; }}
     QMenuBar::item:selected {{ background: {tint(PRIMARY, 0.12)}; border-radius: 4px; }}
     QMenu {{ background: {SURFACE}; border: 1px solid {BORDER}; padding: 4px; }}
@@ -306,7 +320,7 @@ def _stylesheet() -> str:
     QMenu::separator {{ height: 1px; background: {BORDER}; margin: 4px 8px; }}
     QToolTip {{ background: {NAVY}; color: white; border: none; padding: 6px 8px; border-radius: 4px; }}
     QMessageBox {{ background: {SURFACE}; }}
-    QCalendarWidget QWidget {{ alternate-background-color: #f6f8fc; }}
+    QCalendarWidget QWidget {{ alternate-background-color: {HEADER_BG}; }}
     QCalendarWidget QToolButton {{ color: {TEXT}; background: transparent; font-weight: 600; }}
     """)
 
@@ -328,7 +342,7 @@ def apply_theme(app: QApplication, preset: str | None = None) -> None:
     palette = QPalette()
     for role, colour in {
         QPalette.Window: BG, QPalette.WindowText: TEXT, QPalette.Base: SURFACE,
-        QPalette.AlternateBase: "#f9fafd", QPalette.Text: TEXT, QPalette.Button: SURFACE,
+        QPalette.AlternateBase: ALT_ROW, QPalette.Text: TEXT, QPalette.Button: SURFACE,
         QPalette.ButtonText: TEXT, QPalette.Highlight: PRIMARY, QPalette.HighlightedText: "#ffffff",
         QPalette.ToolTipBase: NAVY, QPalette.ToolTipText: "#ffffff",
         QPalette.PlaceholderText: "#9aa5b5", QPalette.Mid: BORDER_STRONG, QPalette.Link: BLUE,
