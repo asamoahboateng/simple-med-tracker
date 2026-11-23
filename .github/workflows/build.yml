@@ -130,6 +130,14 @@ jobs:
       - name: Run tests
         run: '"$VENV_PY" -m pytest'
 
+      - name: Build in the MinIO keys for cloud backup
+        # Repository secrets (Settings > Secrets and variables > Actions). Without them the
+        # build still works and cloud backup says it is not available.
+        env:
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: '"$VENV_PY" scripts/make_cloud_keys.py'
+
       - name: Build with PyInstaller
         run: '"$VENV_PY" -m PyInstaller medtracker.spec --noconfirm --clean'
 

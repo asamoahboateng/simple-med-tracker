@@ -24,6 +24,9 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
+# MinIO keys from .env (or MINIO_* variables) into cloud_keys.py, which the container sees in /src
+python3 scripts/make_cloud_keys.py
+
 echo "==> Building MedTracker for Linux ($ARCH) inside Docker - the first run takes a while"
 docker run --rm --platform "linux/$ARCH" \
     -v "$PWD":/src -w /src \

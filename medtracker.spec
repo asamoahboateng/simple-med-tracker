@@ -46,7 +46,9 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[("resources", "resources")],   # icons, found at runtime via resource_path()
-    hiddenimports=[],
+    # cloud_keys is imported by name (and only exists when built with keys); keyring finds
+    # its password-store backends at runtime, so PyInstaller cannot see them.
+    hiddenimports=["cloud_keys", "keyring.backends.Windows", "keyring.backends.macOS"],
     hookspath=[],
     runtime_hooks=[],
     excludes=EXCLUDES,

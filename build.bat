@@ -18,6 +18,7 @@ echo ==^> Running tests
 if errorlevel 1 goto :failed
 
 echo ==^> Building MedTracker %VERSION% with PyInstaller
+"%PY%" scripts\make_cloud_keys.py
 "%PY%" -m PyInstaller medtracker.spec --noconfirm --clean
 if errorlevel 1 goto :failed
 

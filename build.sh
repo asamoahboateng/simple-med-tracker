@@ -21,6 +21,7 @@ echo "==> Running tests"
 $PY -m pytest
 
 echo "==> Building MedTracker $VERSION with PyInstaller"
+$PY scripts/make_cloud_keys.py
 $PY -m PyInstaller medtracker.spec --noconfirm --clean
 
 if [ "$(uname)" = "Darwin" ]; then
