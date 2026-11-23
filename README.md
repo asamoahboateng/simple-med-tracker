@@ -395,6 +395,13 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
 - **Backups**: **File → Backup database** saves a copy with the date in its file name.
   **File → Restore from backup** replaces the current data, but first saves a safety copy of
   your current data in the `backups` folder.
+- **Cloud backup**: the **☁ Back up** button in the menu bar (or **File → Back up to cloud**,
+  Ctrl+Shift+B) uploads an encrypted copy to the MinIO server, named after the computer and the
+  date and time. The first time, an administrator chooses a passphrase
+  (**File → Cloud backup setup...**). Write it down: without it the backups cannot be restored.
+  **File → Restore from cloud backup...** lists every computer's backups, newest first, and
+  restores the one you pick (after the same safety copy as a normal restore).
+  Server setup and keys: [docs/minio-setup.md](docs/minio-setup.md).
 
 If something unexpected happens, a message box explains it, and the full details are written
 to `medtracker.log` in the data folder. Send that file to whoever supports you.
