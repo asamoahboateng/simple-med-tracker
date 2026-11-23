@@ -2,7 +2,7 @@
 
 A desktop app for tracking medicine stock and dispensing in a small pharmacy or clinic.
 It runs on Windows, macOS and Linux, works fully offline, and keeps its data in one
-local SQLite database file.
+local SQLite database file. Encrypted backups can also be uploaded to the cloud (MinIO).
 
 - **Dashboard**: summary figures; what needs attention (out of stock, expiring, expired); an expiry shelf showing every batch by the month it expires; running low, stock health and this month's dispensing
 - **Add Stock** / **Record Dispensed** / **Remove Stock**: data-entry dialogs. Dispensing takes stock from the batch that expires first (FEFO) automatically.
@@ -11,9 +11,12 @@ local SQLite database file.
 - **Dispensing Log**: every entry (stock in, dispensed, removed), with filters, undo, and Excel/CSV export
 - **Stock & Batches**: current stock per medicine and per batch, colour-coded
 - **Reports**: a month or any date range (quick picks for the last 7, 30 or 90 days), compared with the period before; a day-by-day calendar, top 10 medicines, pace, busiest weekdays and hours, prescriber share, days of stock left and a ranked table, with Excel and PDF export
-- **File menu**: back up and restore the database, open the data folder, change password, sign out
+- **File menu**: back up and restore the database (on this computer or in the cloud), open the data folder, change password, sign out
+- **Cloud backup**: the **☁ Back up** button in the menu bar uploads an encrypted copy of the data; administrators can restore any cloud backup. Every update backs up to the cloud first.
 - **Sign-in and users**: people register and wait for approval; administrators approve or
   revoke access, and every entry records who made it
+- **View menu**: colour themes, text size (80%–160%) and search; the whole app can be used from the keyboard
+- **Help menu**: updates (Windows installs update themselves) and **About MedTracker** with the version and system details
 
 ---
 
@@ -22,12 +25,13 @@ local SQLite database file.
 | File / folder | What it does |
 |---|---|
 | `main.py` | Starts the app. Handles `--demo`, sets up the error log and the global error handler. |
-| `config.py` | App name, version, the 90-day expiry warning, the data folder and `resource_path()`. |
+| `config.py` | App name, version, the 90-day expiry warning, the data folder, the cloud backup server and `resource_path()`. |
 | `db.py` | Creates the SQLite tables and holds all database reads and writes. |
 | `logic.py` | Business rules: validation, FEFO allocation, undo, dashboard and report calculations. It has no UI code, so it can be tested. |
 | `exports.py` | Excel/CSV export and the HTML used for the PDF report. |
 | `demo_data.py` | Sample data for the separate demo database. |
-| `ui/` | One module per page (`dashboard.py`, `add_stock.py`, `dispense.py`, `log.py`, `stock.py`, `report.py`), plus `main_window.py` (sidebar and menus), `medicine.py` (New Medicine dialog), `theme.py` (colours and the app-wide stylesheet), `responsive.py` (grids and layouts that adapt to the window size), the shared table model with status badges (`models.py`), the dashboard's panels and drawn charts (`dashboard_widgets.py`), line icons (`icons.py`), the report chart widgets (`charts.py`) and shared cards/buttons (`widgets.py`). The app font, Atkinson Hyperlegible Next, is bundled in `resources/fonts` under the SIL Open Font License (`OFL.txt`). |
+| `cloud_backup.py`, `s3client.py` | Cloud backup without Qt: compress and encrypt backups, and upload, list and download them over the S3 API (signed requests, Python's own `urllib`). |
+| `ui/` | One module per page (`dashboard.py`, `search.py`, `log.py`, `audit.py`, `stock.py`, `report.py`, `users.py`) and per dialog (`add_stock.py`, `dispense.py`, `remove_stock.py`, `medicine.py` for New/Edit Medicine, `edit_entry.py`, `edit_batch.py`, `units.py`, `login.py`, `about.py`), plus `main_window.py` (sidebar and menus), `cloud_backup_flow.py` and `cloud_settings.py` (the ☁ Back up button, setup and restore), `theme.py` (colours, text size and the app-wide stylesheet), `responsive.py` (grids and layouts that adapt to the window size), the shared table model with status badges (`models.py`), the dashboard's panels and drawn charts (`dashboard_widgets.py`), line icons (`icons.py`), the report chart widgets (`report_widgets.py`) and shared cards/buttons (`widgets.py`). The app font, Atkinson Hyperlegible Next, is bundled in `resources/fonts` under the SIL Open Font License (`OFL.txt`). |
 | `resources/` | App icons (`.ico` Windows, `.icns` macOS, `.png` Linux/window) and small SVG arrows used by the theme. |
 | `tests/` | pytest tests. |
 | `medtracker.spec` | PyInstaller build recipe. |
@@ -36,6 +40,9 @@ local SQLite database file.
 | `updater.py`, `ui/update_bar.py`, `ui/update_flow.py` | Update checking, downloading and installing (see **Updates** below). |
 | `installer/medtracker.iss` | Inno Setup script that builds the Windows installer. |
 | `scripts/make_manifest.py` | Writes `latest.json`, the file installed copies read to find updates. |
+| `scripts/make_cloud_keys.py` | Before a build: writes the MinIO keys from `.env` (or GitHub secrets) into `cloud_keys.py`, which is never committed. |
+| `scripts/check_cloud_keys.py` | Run first by the release workflow: stops a release whose MinIO keys are missing or rejected. |
+| `docs/minio-setup.md` | Setting up the MinIO server and the keys for cloud backup. |
 | `build-linux.sh` / `build-all.sh` | From a Mac: build the Linux version with Docker / build everything this Mac can build. |
 | `run.bat` / `run.sh` | Start the app with the `.venv` Python. No activation needed. |
 | `.github/workflows/build.yml` | Builds on GitHub when you push a version tag (Windows; add macOS/Linux via the tag message). |
@@ -59,9 +66,15 @@ The folder contains:
 - `medtracker.db`: your real data
 - `medtracker_demo.db`: demo data, used only with `--demo`
 - `medtracker.log`: the error log
-- `backups/`: the default location for backups
+- `backups/`: the default location for backups, including the automatic `before-update-…` and
+  `before_restore_…` copies
 
-To open this folder from the app, use **File → Open data folder**.
+To open this folder from the app, use **File → Open data folder**. **Help → About MedTracker**
+shows the database's exact location.
+
+Each new version may upgrade the database format the first time it opens it (automatically,
+keeping all data). An older MedTracker then refuses to open it, and backups made by the newer
+version, rather than risk damaging them.
 
 ---
 
@@ -121,10 +134,22 @@ To open this folder from the app, use **File → Open data folder**.
 ```
 pip install -r requirements.txt -r requirements-dev.txt
 ```
-- `requirements.txt` lists what the app needs, pinned to exact versions.
+- `requirements.txt` lists what the app needs, pinned to exact versions: PySide6 (the window),
+  openpyxl (Excel export), platformdirs (the data folder), cryptography (encrypting cloud backups)
+  and keyring (storing the backup passphrase in Windows Credential Manager or the macOS Keychain).
 - `requirements-dev.txt` lists the build and test tools: PyInstaller and pytest.
 
 If you ran `setup.bat` or `setup.sh`, this step is already done.
+
+**Cloud backup keys (optional):** to build or run a copy that can back up to the cloud, put the
+MinIO keys in a file called `.env` in the project folder:
+```
+accesskey=...
+secretkey=...
+```
+`.env` is never committed. The build scripts turn it into `cloud_keys.py` (also never committed);
+when running from source, run `python scripts/make_cloud_keys.py` once. Without keys everything
+else works, and cloud backup says it is not available. See [docs/minio-setup.md](docs/minio-setup.md).
 
 ### c) Run the app from source
 
@@ -148,8 +173,10 @@ With the venv active, run:
 pytest
 ```
 The tests cover stock calculation, FEFO allocation across several batches, blocking of expired
-batches, blocking of over-dispensing, undo, monthly report totals, and backup/restore.
-Each test uses its own temporary database, so your data is never touched.
+batches, blocking of over-dispensing, undo, edits and the audit log, reports, exports, sign-in and
+permissions, updates, deleting medicines, and backup/restore (on this computer and in the cloud,
+against a small fake storage server). Each test uses its own temporary database, settings and
+password store, so your data, settings and the real cloud server are never touched.
 
 ### e) Build the standalone program with PyInstaller
 
@@ -179,6 +206,7 @@ machine for you, for free.
 | Linux | `./build.sh` | `MedTracker/` folder and `MedTracker-<version>-Linux.zip` |
 
 The version number comes from `APP_VERSION` in `config.py`. That's the only place to change it.
+The build scripts also build in the cloud backup keys from `.env`, if it exists.
 
 **By hand:** activate the venv, then run this from the project folder (same command on every system):
 ```
@@ -221,10 +249,16 @@ GitHub builds on real Windows, Mac (Apple Silicon **and** Intel) and Linux machi
 get every version from your Mac without owning the other computers. It's free for public
 repositories, and private repositories get free monthly build minutes.
 
+> **Keep the repository public** while installed copies update from its Releases: they download
+> `latest.json` and the installer without signing in to GitHub, which stops working for a
+> private repository. To make the code private, first move the releases somewhere public (for
+> example a separate public releases-only repository), release a version that looks there, and
+> wait until every PC has it.
+
 **One-time setup:**
 1. Create a free account at <https://github.com> if you don't have one.
-2. On GitHub, click **+ → New repository**. Name it `medtracker`, choose **Private**, and
-   **don't** tick "Add a README" (this project already has one). Click **Create repository**.
+2. On GitHub, click **+ → New repository**. Name it `medtracker`, choose **Public** (see the note
+   above), and **don't** tick "Add a README" (this project already has one). Click **Create repository**.
 3. In Terminal, in the project folder (the project is already a git repository with its first
    commit), connect it and upload. Replace `YOUR-USERNAME` with your GitHub user name:
    ```
@@ -234,6 +268,9 @@ repositories, and private repositories get free monthly build minutes.
    When git asks for a password, use a GitHub **personal access token**, not your GitHub
    password. To create one: GitHub → Settings → Developer settings → Personal access tokens.
    Give it the "repo" and "workflow" permissions.
+4. For cloud backup, add the MinIO keys as repository secrets (**Settings → Secrets and variables
+   → Actions → New repository secret**): `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY`, with the
+   values from `.env`.
 
 **Every time you want new builds:**
 1. Change `APP_VERSION` in `config.py` if needed (for example to `1.0.1`), then commit your changes:
@@ -252,7 +289,8 @@ repositories, and private repositories get free monthly build minutes.
    ```
    The same words in the tagged commit's message work too.
 3. Open your repository on GitHub and click the **Actions** tab to watch the progress. It takes about 10–15 minutes.
-   Each machine runs the tests first, then builds.
+   First the MinIO keys are checked: a release stops there, with the reason, if they are missing
+   or MinIO rejects them. Then each machine runs the tests and builds.
 4. When it finishes, go to **Releases** (on the right of the repository's main page). Download
    (only the platforms you built are there):
    - `MedTracker-Setup-<version>.exe` for Windows 10/11 (the installer; installed copies update themselves),
@@ -303,8 +341,9 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
 ### For the maintainer
 
 1. Set `APP_VERSION` in `config.py`, commit, then tag it with the same number and push the tag:
-   `git tag -a v1.2.0 -m "What changed (shown as the release notes)"` and `git push origin v1.2.0`.
-   The workflow refuses to publish if the tag and `APP_VERSION` differ.
+   `git tag -a v1.4.1 -m "What changed (shown as the release notes)"` and `git push origin v1.4.1`.
+   The workflow refuses to publish if the tag and `APP_VERSION` differ, or if the MinIO keys
+   (repository secrets) are missing or don't work.
 2. GitHub builds the Windows folder, packs it with Inno Setup into `MedTracker-Setup-1.2.0.exe`, writes
    `latest.json` (version, download link, SHA-256, size, release notes) and attaches the installer,
    `latest.json` and `MedTracker-Windows-portable.zip` to the Release.
@@ -334,15 +373,18 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
 - **Superadmin**: click **Use the superadmin code** on the sign-in window and enter the
   6-digit code.
   The superadmin can approve, revoke and restore anyone, make a user a **user admin** (or back
-  to a regular user), and set a new password for anyone who has forgotten theirs. The code is
+  to a regular user), allow someone to delete medicines, and set a new password for anyone who
+  has forgotten theirs. The code is
   stored only as a salted hash, so it can't be read from the source code or the program; keep
   it somewhere safe.
 - **User admins** can approve, revoke, restore and reset passwords for regular users, but not
-  for other administrators. Only administrators see the **Users** page and **File → Restore
-  from backup** (a restore also replaces the user accounts).
+  for other administrators. Only administrators see the **Users** page, **File → Restore
+  from backup**, **File → Restore from cloud backup...** and **File → Cloud backup setup...**
+  (a restore also replaces the user accounts).
 - **Users page**: new accounts show as *Awaiting approval*, and the sidebar shows how many are
   waiting, e.g. **Users (2)**. Select an account and use **Approve**, **Revoke access** or
-  **Set new password**. **Remove sign-in code** clears a user's 6-digit code if someone else may
+  **Set new password**. The superadmin also has **Allow deleting medicines** / **Stop deleting
+  medicines**; the **Can delete medicines** column shows who has it. **Remove sign-in code** clears a user's 6-digit code if someone else may
   know it; they can still sign in with their password. Revoking takes effect at once: a revoked user who is still signed in
   is signed out the next time they do anything.
 - **Entered by**: every stock or dispensing entry records who made it, shown in the
@@ -387,29 +429,45 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
   (expired batches are included and marked) and its whole remaining quantity is filled in, or leave
   it on *Automatic*, which takes from the earliest expiry first. Removals show as **REMOVED** in the
   log with their reason, count against stock, and are not counted as dispensing in reports.
-- **Stock & Batches**: double-click a medicine's **name**, **Unit**, **Reorder level** or **Note** to
-  change it. Double-click a batch to open **Edit Batch** (also on the Search page), where you can
+- **Stock & Batches**: double-click a medicine (or select it and press Enter) to open **Edit
+  Medicine**, where you change its name, unit, reorder level and note together. Double-click a batch to open **Edit Batch** (also on the Search page), where you can
   correct its number, expiry and the quantity received. The quantity received can only be changed
   there when the batch came in one delivery; otherwise correct each delivery in the log.
   Other values are calculated and can't be edited.
 - **Delete a medicine**: double-click it on Stock & Batches and click **Delete medicine**, then
   confirm. Only a medicine with no stock and nothing in the log can be deleted (e.g. one added by
-  mistake); for any other the button is greyed out, so no history is ever lost. Only the
+  mistake); for any other the button is greyed out, so no history is ever lost.
+  You're asked to confirm first, and it can't be undone. Only the
   superadmin, and anyone the superadmin allows (**Users → Allow deleting medicines**), sees the
   button.
 - **Colours**: **View → Colour theme** switches between Bottle green, Navy, Ocean blue, Teal,
   Plum and Charcoal. The change applies at once and is remembered on that computer. Red, amber
-  and green keep their meaning (expired, expiring, OK) in every theme.
+  and green keep their meaning (expired, expiring, OK) in every theme. The theme colours the whole
+  window: background, table headers, buttons, scrollbars and menus, not just the sidebar.
+- **Text size**: **View → Text size**, Ctrl+= / Ctrl+- / Ctrl+0, or the **A− 100% A+** buttons at
+  the right of the menu bar (80% to 160%, remembered on that computer).
+- **Keyboard**: Tab moves between controls (a focused control is outlined), Enter acts like a
+  double-click in tables, and Esc goes back. On Search, Alt+S/M/L/B jump to the search box,
+  medicines, log and batches; on Stock & Batches, Alt+S/M/B.
+- **Help → About MedTracker...**: the version, computer name, operating system, who is signed in,
+  where the database is and when the last cloud backup was made. **Copy details** puts all of it
+  on the clipboard to send to whoever supports you.
 - **Backups**: **File → Backup database** saves a copy with the date in its file name.
   **File → Restore from backup** replaces the current data, but first saves a safety copy of
   your current data in the `backups` folder.
 - **Cloud backup**: the **☁ Back up** button in the menu bar (or **File → Back up to cloud**,
-  Ctrl+Shift+B) uploads an encrypted copy to the MinIO server, named after the computer and the
-  date and time. The first time, an administrator chooses a passphrase
-  (**File → Cloud backup setup...**). Write it down: without it the backups cannot be restored.
-  **File → Restore from cloud backup...** lists every computer's backups, newest first, and
-  restores the one you pick (after the same safety copy as a normal restore).
-  Server setup and keys: [docs/minio-setup.md](docs/minio-setup.md).
+  Ctrl+Shift+B) uploads an encrypted copy to the MinIO server as
+  `<computer name>/medtracker_<date>_<time>.db.gz.enc`. Nothing is overwritten: every backup is
+  kept. The upload runs in the background; hover over the button to see when the last one was made.
+  - **Setup (once per computer, administrators):** **File → Cloud backup setup...** sets the
+    passphrase that encrypts the backups. It is kept in Windows Credential Manager (or the macOS
+    Keychain). **Write it down**: without it the backups cannot be restored, not even by the
+    server's owner. Until it is set, other users are asked to contact an administrator.
+  - **Restore (administrators):** **File → Restore from cloud backup...** lists every computer's
+    backups, newest first (this computer's are marked), and restores the one you pick after the
+    usual confirmation and safety copy. A wrong passphrase changes nothing.
+  - **Before updates:** each update's `before-update-…` copy is also uploaded first (see **Updates**).
+  - Server setup and keys: [docs/minio-setup.md](docs/minio-setup.md).
 
 If something unexpected happens, a message box explains it, and the full details are written
 to `medtracker.log` in the data folder. Send that file to whoever supports you.
