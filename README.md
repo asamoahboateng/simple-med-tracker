@@ -341,7 +341,7 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
 ### For the maintainer
 
 1. Set `APP_VERSION` in `config.py`, commit, then tag it with the same number and push the tag:
-   `git tag -a v1.4.1 -m "What changed (shown as the release notes)"` and `git push origin v1.4.1`.
+   `git tag -a v1.5.0 -m "What changed (shown as the release notes)"` and `git push origin v1.5.0`.
    The workflow refuses to publish if the tag and `APP_VERSION` differ, or if the MinIO keys
    (repository secrets) are missing or don't work.
 2. GitHub builds the Windows folder, packs it with Inno Setup into `MedTracker-Setup-1.2.0.exe`, writes
