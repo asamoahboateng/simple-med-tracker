@@ -1,4 +1,4 @@
-"""ui/cloud_settings.py - Setting up cloud backup (the passphrase) and restoring from it."""
+"""ui/cloud_settings.py - Restoring from a cloud backup."""
 
 import shutil
 import socket
@@ -9,83 +9,17 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QVBoxLayout,
+    QApplication, QDialog, QDialogButtonBox, QLabel, QListWidget, QListWidgetItem, QVBoxLayout,
 )
 
-from cloud_backup import (
-    CloudBackupError, cloud_config, download_backup, list_backups, load_passphrase, save_passphrase,
-    slug,
-)
+from cloud_backup import CloudBackupError, cloud_config, download_backup, list_backups, slug
 from s3client import S3Error
 from ui import theme
-from ui.widgets import dialog_header, make_button, show_error, style_dialog_buttons
-
-MIN_PASSPHRASE = 8
-
-
-class CloudSetupDialog(QDialog):
-    """Choose the passphrase that encrypts this computer's cloud backups."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Cloud backup setup")
-        self.setMinimumWidth(480)
-        self.has_passphrase = bool(load_passphrase())
-        self.passphrase = QLineEdit()
-        self.confirm = QLineEdit()
-        for edit in (self.passphrase, self.confirm):
-            edit.setEchoMode(QLineEdit.Password)
-        self.passphrase.setPlaceholderText(
-            "Leave empty to keep the current one" if self.has_passphrase
-            else f"At least {MIN_PASSPHRASE} characters")
-
-        form = QFormLayout()
-        form.addRow("Passphrase:", self.passphrase)
-        form.addRow("Confirm:", self.confirm)
-        hint = QLabel("Write this passphrase down and keep it safe. Without it the cloud "
-                      "backups cannot be restored."
-                      + (" Backups made before a change still need the old passphrase."
-                         if self.has_passphrase else ""))
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {theme.AMBER_TEXT}; font-weight: 700;")
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        style_dialog_buttons(buttons)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(dialog_header("Cloud backup", "Backups are encrypted with this passphrase "
-                                       "before they leave the computer", "☁", theme.PRIMARY))
-        layout.addLayout(form)
-        layout.addWidget(hint)
-        layout.addWidget(buttons)
-
-    def save(self) -> str:
-        """Store the passphrase. Returns an error message, or "" when saved (or kept)."""
-        first, second = self.passphrase.text(), self.confirm.text()
-        if self.has_passphrase and not first and not second:
-            return ""
-        if first != second:
-            return "Passphrases do not match."
-        if len(first) < MIN_PASSPHRASE:
-            return f"Use at least {MIN_PASSPHRASE} characters for the passphrase."
-        try:
-            save_passphrase(first)
-        except CloudBackupError as exc:
-            return str(exc)
-        return ""
-
-    def accept(self):
-        error = self.save()
-        if error:
-            show_error(self, error)
-            return
-        super().accept()
+from ui.widgets import dialog_header, make_button, show_error
 
 
 def _row_text(key: str, size: int, this_pc: str) -> str:
-    """'23 Nov 2026 09:05 · front-desk-pc · 1.2 MB' for pc/medtracker_2026-11-23_090500.db.gz.enc"""
+    """'23 Nov 2026 09:05 · front-desk-pc · 1.2 MB' for pc/medtracker_2026-11-23_090500.db.gz"""
     computer, _, name = key.rpartition("/")
     try:
         when = datetime.strptime(name[len("medtracker_"):][:17], "%Y-%m-%d_%H%M%S")
@@ -104,7 +38,7 @@ class _ListRelay(QObject):
 
 
 class CloudRestoreDialog(QDialog):
-    """Pick one of the backups on the server; after exec(), chosen_file() is the decrypted copy."""
+    """Pick one of the backups on the server; after exec(), chosen_file() is the downloaded copy."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -118,10 +52,6 @@ class CloudRestoreDialog(QDialog):
         self.backups.itemDoubleClicked.connect(lambda _item: self.restore_selected())
         self.status = QLabel("Loading the list of backups…")
         self.status.setWordWrap(True)
-        self.passphrase = QLineEdit(load_passphrase())
-        self.passphrase.setEchoMode(QLineEdit.Password)
-        form = QFormLayout()
-        form.addRow("Passphrase:", self.passphrase)
 
         self.restore_button = make_button("Restore", "primary")
         self.restore_button.setEnabled(False)
@@ -135,7 +65,6 @@ class CloudRestoreDialog(QDialog):
                                        "Newest first, from every computer", "☁", theme.PRIMARY))
         layout.addWidget(self.status)
         layout.addWidget(self.backups, 1)
-        layout.addLayout(form)
         layout.addWidget(buttons)
 
         self._relay = _ListRelay()          # no parent: may outlive the dialog until the thread ends
@@ -172,7 +101,7 @@ class CloudRestoreDialog(QDialog):
         dest = self._temp_dir / "cloud_backup.db"
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            download_backup(cloud_config(), item.data(Qt.UserRole), self.passphrase.text(), dest)
+            download_backup(cloud_config(), item.data(Qt.UserRole), dest)
         except (S3Error, CloudBackupError) as exc:
             QApplication.restoreOverrideCursor()
             show_error(self, str(exc), title="Cannot restore")

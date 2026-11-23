@@ -284,7 +284,7 @@ class UpdateController(QObject):
     def _backup_and_install(self, installer, quit_after: bool = True,
                             interactive: bool = False) -> bool:
         """
-        Back up the data (here and, when set up, to the cloud), start the installer, and
+        Back up the data (here and, when this build has the keys, to the cloud), start the installer, and
         (normally) close MedTracker. `interactive`: someone clicked Install, so a failed cloud
         backup asks whether to go on; otherwise (installing on close) it is only logged.
         """

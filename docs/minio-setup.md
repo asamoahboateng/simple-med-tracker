@@ -1,6 +1,6 @@
 # Cloud backup: MinIO setup
 
-MedTracker's **☁ Back up** button uploads an encrypted copy of the database to MinIO.
+MedTracker's **☁ Back up** button uploads a compressed copy of the database to MinIO.
 This guide is for whoever runs the MinIO server and builds MedTracker releases.
 
 ## Addresses
@@ -13,9 +13,13 @@ This guide is for whoever runs the MinIO server and builds MedTracker releases.
 
 Both values are in `config.py` (`CLOUD_ENDPOINT`, `CLOUD_BUCKET`).
 
-Each backup is stored as `<computer name>/medtracker_<YYYY-MM-DD_HHMMSS>.db.gz.enc`: gzip
-compressed, then AES-256-GCM encrypted with the passphrase set on that PC
-(**File → Cloud backup setup...**). Without the passphrase a backup cannot be read or restored.
+Each backup is stored as `<computer name>/medtracker_<YYYY-MM-DD_HHMMSS>.db.gz`: the SQLite
+database, gzip compressed. There is no passphrase, so any computer with MedTracker can back up
+and restore without setup. **The backups are not encrypted**: anyone who can read the bucket
+can open them, so keep the bucket private and the keys secret.
+
+Backups made by MedTracker 1.4.x end in `.db.gz.enc` and are encrypted with the passphrase set
+on that PC. They are still listed and restore on a computer that saved that passphrase.
 
 ## 1. Turn on versioning
 
@@ -86,4 +90,5 @@ available.
 2. Put the new key in `.env` and the GitHub secrets.
 3. Release a new MedTracker version. Older versions can no longer back up until they update.
 
-The backups themselves stay safe: they are encrypted with each pharmacy's passphrase.
+Whoever has the leaked key could download the backups (they are not encrypted), so act
+quickly. The key cannot delete or overwrite them (step 2's policy has no delete).

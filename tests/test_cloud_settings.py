@@ -1,4 +1,4 @@
-"""Restoring from a cloud backup: the list of backups, the passphrase and the restore itself."""
+"""Restoring from a cloud backup: the list of backups and the restore itself."""
 
 import socket
 import time
@@ -8,7 +8,6 @@ import pytest
 from PySide6.QtWidgets import QApplication, QDialog
 
 import auth
-import cloud_backup
 import db
 from cloud_backup import slug, upload_backup
 from ui import cloud_settings
@@ -18,7 +17,7 @@ ADMIN = auth.User(None, "superadmin", "Superadmin", auth.SUPERADMIN)
 
 
 @pytest.fixture
-def env(qapp, tmp_path, monkeypatch, memory_keyring, fake_s3, isolated_settings):
+def env(qapp, tmp_path, monkeypatch, fake_s3, isolated_settings):
     monkeypatch.setattr(cloud_settings, "cloud_config", lambda: fake_s3.cfg)
     messages = []
     monkeypatch.setattr(cloud_settings, "show_error", lambda parent, text, title="": messages.append(text))
@@ -34,9 +33,9 @@ def wait_until(condition, timeout=10):
         time.sleep(0.01)
 
 
-def upload(env, conn, tmp_path, computer, when, passphrase="passphrase1"):
+def upload(env, conn, tmp_path, computer, when):
     db.backup_to(conn, tmp_path / "snap.db")
-    return upload_backup(env.cfg, tmp_path / "snap.db", passphrase, computer, when)
+    return upload_backup(env.cfg, tmp_path / "snap.db", computer, when)
 
 
 def test_restore_dialog_lists_newest_first(env, conn, tmp_path):
@@ -52,19 +51,18 @@ def test_restore_dialog_lists_newest_first(env, conn, tmp_path):
     assert dialog.restore_button.isEnabled()
 
 
-def test_passphrase_prefilled_from_keyring(env):
-    cloud_backup.save_passphrase("passphrase1")
-    assert CloudRestoreDialog().passphrase.text() == "passphrase1"
+def test_no_passphrase_box(env):
+    assert not hasattr(CloudRestoreDialog(), "passphrase")
 
 
-def test_wrong_passphrase_shows_error_and_returns_nothing(env, conn, tmp_path):
+def test_download_error_shows_and_returns_nothing(env, conn, tmp_path):
     upload(env, conn, tmp_path, "pc1", datetime(2026, 11, 23, 9, 5))
     dialog = CloudRestoreDialog()
     wait_until(lambda: dialog.backups.count() == 1)
     dialog.backups.setCurrentRow(0)
-    dialog.passphrase.setText("wrong-pass")
+    env.store[dialog.backups.item(0).data(256)] = b"garbage"
     dialog.restore_selected()
-    assert env.messages == ["The backup passphrase is not correct."]
+    assert env.messages == ["This file is not a MedTracker cloud backup."]
     assert dialog.chosen_file() is None
     assert dialog.result() != QDialog.DialogCode.Accepted
 
@@ -86,7 +84,6 @@ def test_chosen_backup_restores_through_existing_checks(env, conn, add, tmp_path
     dialog = CloudRestoreDialog()
     wait_until(lambda: dialog.backups.count() == 1)
     dialog.backups.setCurrentRow(0)
-    dialog.passphrase.setText("passphrase1")
     dialog.restore_selected()
     path = dialog.chosen_file()
     assert db.is_valid_backup(path)

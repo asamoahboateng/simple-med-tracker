@@ -2,7 +2,7 @@
 
 A desktop app for tracking medicine stock and dispensing in a small pharmacy or clinic.
 It runs on Windows, macOS and Linux, works fully offline, and keeps its data in one
-local SQLite database file. Encrypted backups can also be uploaded to the cloud (MinIO).
+local SQLite database file. Backups can also be uploaded to the cloud (MinIO).
 
 - **Dashboard**: summary figures; what needs attention (out of stock, expiring, expired); an expiry shelf showing every batch by the month it expires; running low, stock health and this month's dispensing
 - **Add Stock** / **Record Dispensed** / **Remove Stock**: data-entry dialogs. Dispensing takes stock from the batch that expires first (FEFO) automatically.
@@ -12,7 +12,7 @@ local SQLite database file. Encrypted backups can also be uploaded to the cloud 
 - **Stock & Batches**: current stock per medicine and per batch, colour-coded
 - **Reports**: a month or any date range (quick picks for the last 7, 30 or 90 days), compared with the period before; a day-by-day calendar, top 10 medicines, pace, busiest weekdays and hours, prescriber share, days of stock left and a ranked table, with Excel and PDF export
 - **File menu**: back up and restore the database (on this computer or in the cloud), open the data folder, change password, sign out
-- **Cloud backup**: the **☁ Back up** button in the menu bar uploads an encrypted copy of the data; administrators can restore any cloud backup. Every update backs up to the cloud first.
+- **Cloud backup**: the **☁ Back up** button in the menu bar uploads a copy of the data; administrators can restore any cloud backup. Every update backs up to the cloud first.
 - **Sign-in and users**: people register and wait for approval; administrators approve or
   revoke access, and every entry records who made it
 - **View menu**: colour themes, text size (80%–160%) and search; the whole app can be used from the keyboard
@@ -30,7 +30,7 @@ local SQLite database file. Encrypted backups can also be uploaded to the cloud 
 | `logic.py` | Business rules: validation, FEFO allocation, undo, dashboard and report calculations. It has no UI code, so it can be tested. |
 | `exports.py` | Excel/CSV export and the HTML used for the PDF report. |
 | `demo_data.py` | Sample data for the separate demo database. |
-| `cloud_backup.py`, `s3client.py` | Cloud backup without Qt: compress and encrypt backups, and upload, list and download them over the S3 API (signed requests, Python's own `urllib`). |
+| `cloud_backup.py`, `s3client.py` | Cloud backup without Qt: compress backups, and upload, list and download them over the S3 API (signed requests, Python's own `urllib`). |
 | `ui/` | One module per page (`dashboard.py`, `search.py`, `log.py`, `audit.py`, `stock.py`, `report.py`, `users.py`) and per dialog (`add_stock.py`, `dispense.py`, `remove_stock.py`, `medicine.py` for New/Edit Medicine, `edit_entry.py`, `edit_batch.py`, `units.py`, `login.py`, `about.py`), plus `main_window.py` (sidebar and menus), `cloud_backup_flow.py` and `cloud_settings.py` (the ☁ Back up button, setup and restore), `theme.py` (colours, text size and the app-wide stylesheet), `responsive.py` (grids and layouts that adapt to the window size), the shared table model with status badges (`models.py`), the dashboard's panels and drawn charts (`dashboard_widgets.py`), line icons (`icons.py`), the report chart widgets (`report_widgets.py`) and shared cards/buttons (`widgets.py`). The app font, Atkinson Hyperlegible Next, is bundled in `resources/fonts` under the SIL Open Font License (`OFL.txt`). |
 | `resources/` | App icons (`.ico` Windows, `.icns` macOS, `.png` Linux/window) and small SVG arrows used by the theme. |
 | `tests/` | pytest tests. |
@@ -135,8 +135,8 @@ version, rather than risk damaging them.
 pip install -r requirements.txt -r requirements-dev.txt
 ```
 - `requirements.txt` lists what the app needs, pinned to exact versions: PySide6 (the window),
-  openpyxl (Excel export), platformdirs (the data folder), cryptography (encrypting cloud backups)
-  and keyring (storing the backup passphrase in Windows Credential Manager or the macOS Keychain).
+  openpyxl (Excel export), platformdirs (the data folder), cryptography and keyring (to open
+  cloud backups made by 1.4.x, which were encrypted with a passphrase saved on that computer).
 - `requirements-dev.txt` lists the build and test tools: PyInstaller and pytest.
 
 If you ran `setup.bat` or `setup.sh`, this step is already done.
@@ -379,7 +379,7 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
   it somewhere safe.
 - **User admins** can approve, revoke, restore and reset passwords for regular users, but not
   for other administrators. Only administrators see the **Users** page, **File → Restore
-  from backup**, **File → Restore from cloud backup...** and **File → Cloud backup setup...**
+  from backup**, and **File → Restore from cloud backup...**
   (a restore also replaces the user accounts).
 - **Users page**: new accounts show as *Awaiting approval*, and the sidebar shows how many are
   waiting, e.g. **Users (2)**. Select an account and use **Approve**, **Revoke access** or
@@ -456,16 +456,14 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
   **File → Restore from backup** replaces the current data, but first saves a safety copy of
   your current data in the `backups` folder.
 - **Cloud backup**: the **☁ Back up** button in the menu bar (or **File → Back up to cloud**,
-  Ctrl+Shift+B) uploads an encrypted copy to the MinIO server as
-  `<computer name>/medtracker_<date>_<time>.db.gz.enc`. Nothing is overwritten: every backup is
+  Ctrl+Shift+B) uploads a compressed copy to the MinIO server as
+  `<computer name>/medtracker_<date>_<time>.db.gz`. No setup or passphrase is needed, so anyone
+  can press it. The backups are not encrypted: keep the bucket private and the keys secret. Nothing is overwritten: every backup is
   kept. The upload runs in the background; hover over the button to see when the last one was made.
-  - **Setup (once per computer, administrators):** **File → Cloud backup setup...** sets the
-    passphrase that encrypts the backups. It is kept in Windows Credential Manager (or the macOS
-    Keychain). **Write it down**: without it the backups cannot be restored, not even by the
-    server's owner. Until it is set, other users are asked to contact an administrator.
   - **Restore (administrators):** **File → Restore from cloud backup...** lists every computer's
     backups, newest first (this computer's are marked), and restores the one you pick after the
-    usual confirmation and safety copy. A wrong passphrase changes nothing.
+    usual confirmation and safety copy. No passphrase is asked for. Older encrypted backups
+    (`.db.gz.enc`, made by 1.4.x) restore only on a computer that saved their passphrase.
   - **Before updates:** each update's `before-update-…` copy is also uploaded first (see **Updates**).
   - Server setup and keys: [docs/minio-setup.md](docs/minio-setup.md).
 

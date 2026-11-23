@@ -1,5 +1,5 @@
 """
-ui/cloud_backup_flow.py - The ☁ Back up button: copy the database, then encrypt and upload
+ui/cloud_backup_flow.py - The ☁ Back up button: copy the database, then compress and upload
 it in a background thread (cloud_backup.py does the work), like ui/update_flow.py.
 """
 
@@ -15,15 +15,13 @@ from PySide6.QtWidgets import QPushButton
 
 import config
 import db
-from cloud_backup import CloudBackupError, cloud_config, load_passphrase, upload_backup
+from cloud_backup import CloudBackupError, cloud_config, upload_backup
 from s3client import S3Error
-from ui.cloud_settings import CloudSetupDialog
 from ui.widgets import show_error, show_info
 
 log = logging.getLogger("medtracker")
 
 NOT_AVAILABLE = "Cloud backup is not available in this version of MedTracker."
-NOT_SET_UP = "Cloud backup is not set up on this computer. Ask an administrator."
 UPLOADED = "Backup uploaded to the cloud."
 IDLE_TEXT, BUSY_TEXT = "☁ Back up", "☁ Backing up…"
 
@@ -81,14 +79,14 @@ def _relay() -> _Relay:
 def upload_now(snapshot) -> str | None:
     """
     Upload the database copy at `snapshot` right away (used before an update; the copy is
-    kept). None when cloud backup isn't set up on this computer, "" when it worked, otherwise
-    the error message.
+    kept). None when this build has no cloud keys, "" when it worked, otherwise the error
+    message.
     """
-    cfg, passphrase = cloud_config(), load_passphrase()
-    if cfg is None or not passphrase:
+    cfg = cloud_config()
+    if cfg is None:
         return None
     try:
-        upload_backup(cfg, snapshot, passphrase, socket.gethostname(), datetime.now())
+        upload_backup(cfg, snapshot, socket.gethostname(), datetime.now())
     except (S3Error, CloudBackupError) as exc:
         log.warning("Cloud backup failed: %s", exc)
         return str(exc)
@@ -96,11 +94,11 @@ def upload_now(snapshot) -> str | None:
     return ""
 
 
-def _upload(snapshot, passphrase: str) -> None:
+def _upload(snapshot) -> None:
     """Runs in a background thread."""
     message = ""
     try:
-        upload_backup(cloud_config(), snapshot, passphrase, socket.gethostname(), datetime.now())
+        upload_backup(cloud_config(), snapshot, socket.gethostname(), datetime.now())
     except (S3Error, CloudBackupError) as exc:
         message = str(exc)
     except Exception:                                  # never leave the button stuck
@@ -143,14 +141,6 @@ class CloudBackupController(QObject):
         if cloud_config() is None:
             show_error(self.window, NOT_AVAILABLE, title="Cloud backup")
             return
-        passphrase = load_passphrase()
-        if not passphrase:
-            if not self.user.is_admin:
-                show_error(self.window, NOT_SET_UP, title="Cloud backup")
-                return
-            if not CloudSetupDialog(self.window).exec():
-                return
-            passphrase = load_passphrase()
         snapshot = config.backups_dir() / f"cloud_upload_{datetime.now():%Y-%m-%d_%H%M%S}.db"
         try:
             db.backup_to(self.conn, snapshot)      # on this thread: the connection belongs to it
@@ -162,7 +152,7 @@ class CloudBackupController(QObject):
             return
         _busy = True
         self.refresh()
-        threading.Thread(target=_upload, args=(snapshot, passphrase), daemon=True).start()
+        threading.Thread(target=_upload, args=(snapshot,), daemon=True).start()
 
     def _on_done(self, message: str) -> None:
         self.refresh()

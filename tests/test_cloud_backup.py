@@ -1,34 +1,47 @@
-"""Cloud backup: encrypting, naming, uploading and downloading backups (cloud_backup.py)."""
+"""Cloud backup: compressing, naming, uploading and downloading backups (cloud_backup.py)."""
+
+import gzip
+import os
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import db
-from cloud_backup import CloudBackupError, pack, unpack
+from cloud_backup import OLD_BACKUP, CloudBackupError, pack, unpack
 
 
-def test_pack_round_trip_smaller_and_unreadable(conn, add, tmp_path):
+def seal_old(plain: bytes, passphrase: str) -> bytes:
+    """A backup as MedTracker 1.4.x made it: encrypted with the passphrase."""
+    import hashlib
+    salt, nonce = os.urandom(16), os.urandom(12)
+    key = hashlib.scrypt(passphrase.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    return b"MTCB1" + salt + nonce + AESGCM(key).encrypt(nonce, gzip.compress(plain), b"MTCB1")
+
+
+def test_pack_round_trip_compressed_without_passphrase(conn, add, tmp_path):
     add()
     db.backup_to(conn, tmp_path / "s.db")
     plain = (tmp_path / "s.db").read_bytes()
-    blob = pack(plain, "correct horse")
-    assert blob.startswith(b"MTCB1")
+    blob = pack(plain)
     assert len(blob) < len(plain)
-    assert b"Paracetamol" not in blob
-    assert unpack(blob, "correct horse") == plain
+    assert gzip.decompress(blob) == plain                # an ordinary .gz file
+    assert unpack(blob) == plain
 
 
-def test_wrong_passphrase():
-    with pytest.raises(CloudBackupError, match="The backup passphrase is not correct."):
-        unpack(pack(b"x" * 100, "right"), "wrong")
+def test_old_encrypted_backup_opens_with_saved_passphrase():
+    assert unpack(seal_old(b"x" * 100, "right"), "right") == b"x" * 100
+
+
+@pytest.mark.parametrize("passphrase", ["", "wrong"])
+def test_old_encrypted_backup_without_its_passphrase(passphrase):
+    with pytest.raises(CloudBackupError) as err:
+        unpack(seal_old(b"x" * 100, "right"), passphrase)
+    assert str(err.value) == OLD_BACKUP
 
 
 def test_not_a_backup_file():
     with pytest.raises(CloudBackupError, match="not a MedTracker cloud backup"):
-        unpack(b"SQLite format 3\x00" + b"\x00" * 100, "p")
-
-
-def test_same_input_packs_differently():
-    assert pack(b"abc", "p") != pack(b"abc", "p")
+        unpack(b"SQLite format 3\x00" + b"\x00" * 100)
 
 
 # --- naming, upload, list, download ----------------------------------------------
@@ -40,8 +53,7 @@ from pathlib import Path
 
 import cloud_backup
 from cloud_backup import (
-    cloud_config, download_backup, list_backups, load_passphrase, object_key, save_passphrase, slug,
-    upload_backup,
+    cloud_config, download_backup, list_backups, object_key, slug, upload_backup,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -55,33 +67,45 @@ def test_slug(raw, expected):
 
 
 def test_object_key():
-    assert object_key("PC 1", datetime(2026, 11, 23, 9, 5, 7)) == "pc-1/medtracker_2026-11-23_090507.db.gz.enc"
+    assert object_key("PC 1", datetime(2026, 11, 23, 9, 5, 7)) == "pc-1/medtracker_2026-11-23_090507.db.gz"
 
 
 def test_upload_list_download_round_trip(fake_s3, conn, add, tmp_path):
     add()
     db.backup_to(conn, tmp_path / "s.db")
-    key = upload_backup(fake_s3.cfg, tmp_path / "s.db", "passphrase1", "PC1", datetime(2026, 11, 23, 9, 5))
-    assert key == "pc1/medtracker_2026-11-23_090500.db.gz.enc"
+    key = upload_backup(fake_s3.cfg, tmp_path / "s.db", "PC1", datetime(2026, 11, 23, 9, 5))
+    assert key == "pc1/medtracker_2026-11-23_090500.db.gz"
     assert list_backups(fake_s3.cfg)[0].key == key
-    download_backup(fake_s3.cfg, key, "passphrase1", tmp_path / "back.db")
+    download_backup(fake_s3.cfg, key, tmp_path / "back.db")
     assert db.is_valid_backup(tmp_path / "back.db")
 
 
 def test_list_backups_all_pcs_newest_first_backups_only(fake_s3):
-    for key in ("pc1/medtracker_2026-11-01_090000.db.gz.enc", "pc2/medtracker_2026-11-20_090000.db.gz.enc",
-                "pc1/medtracker_2026-11-10_090000.db.gz.enc", "notes.txt"):
+    for key in ("pc1/medtracker_2026-11-01_090000.db.gz.enc", "pc2/medtracker_2026-11-20_090000.db.gz",
+                "pc1/medtracker_2026-11-10_090000.db.gz", "notes.txt", "pc1/x.gz"):
         fake_s3.store[key] = b"x"
     assert [o.key for o in list_backups(fake_s3.cfg)] == [
-        "pc2/medtracker_2026-11-20_090000.db.gz.enc", "pc1/medtracker_2026-11-10_090000.db.gz.enc",
-        "pc1/medtracker_2026-11-01_090000.db.gz.enc"]
+        "pc2/medtracker_2026-11-20_090000.db.gz", "pc1/medtracker_2026-11-10_090000.db.gz",
+        "pc1/medtracker_2026-11-01_090000.db.gz.enc"]     # older encrypted backups are still listed
 
 
-def test_download_with_wrong_passphrase_writes_nothing(fake_s3, conn, tmp_path):
+def test_download_old_backup_uses_saved_passphrase(fake_s3, conn, add, tmp_path, memory_keyring):
+    import keyring
+    add()
     db.backup_to(conn, tmp_path / "s.db")
-    key = upload_backup(fake_s3.cfg, tmp_path / "s.db", "passphrase1", "PC1", datetime(2026, 11, 23))
-    with pytest.raises(CloudBackupError, match="passphrase is not correct"):
-        download_backup(fake_s3.cfg, key, "wrong-pass", tmp_path / "back.db")
+    key = "pc1/medtracker_2026-11-01_090000.db.gz.enc"
+    fake_s3.store[key] = seal_old((tmp_path / "s.db").read_bytes(), "passphrase1")
+    keyring.set_password("MedTracker cloud backup", "passphrase", "passphrase1")
+    download_backup(fake_s3.cfg, key, tmp_path / "back.db")
+    assert db.is_valid_backup(tmp_path / "back.db")
+
+
+def test_download_old_backup_elsewhere_writes_nothing(fake_s3, tmp_path, memory_keyring):
+    key = "pc1/medtracker_2026-11-01_090000.db.gz.enc"
+    fake_s3.store[key] = seal_old(b"x" * 100, "passphrase1")
+    with pytest.raises(CloudBackupError) as err:
+        download_backup(fake_s3.cfg, key, tmp_path / "back.db")
+    assert str(err.value) == OLD_BACKUP
     assert not (tmp_path / "back.db").exists()
 
 
@@ -125,10 +149,3 @@ def test_keys_give_config(monkeypatch):
     monkeypatch.setitem(sys.modules, "cloud_keys", fake)
     cfg = cloud_config()
     assert (cfg.endpoint, cfg.bucket, cfg.access_key) == ("https://s3.kalourmade.com", "medtracker-inventory", "a")
-
-
-def test_passphrase_in_keyring(memory_keyring):
-    assert load_passphrase() == ""
-    save_passphrase("passphrase1")
-    assert load_passphrase() == "passphrase1"
-    assert cloud_backup.KEYRING_SERVICE == "MedTracker cloud backup"

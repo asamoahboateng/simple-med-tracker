@@ -1,4 +1,4 @@
-"""The ☁ Back up button: uploading in the background, messages and the setup dialog."""
+"""The ☁ Back up button: uploading in the background, messages, and backing up before updates."""
 
 import threading
 import time
@@ -9,9 +9,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 import auth
 import db
-import cloud_backup
 from ui import cloud_backup_flow as flow
-from ui.cloud_settings import CloudSetupDialog
 
 ADMIN = auth.User(None, "superadmin", "Superadmin", auth.SUPERADMIN)
 CLERK = auth.User(2, "clerk", "Clerk", auth.USER)
@@ -19,8 +17,8 @@ NOW = datetime(2026, 11, 23, 9, 0).timestamp()
 
 
 @pytest.fixture
-def env(qapp, tmp_path, monkeypatch, memory_keyring, fake_s3, isolated_settings):
-    """Isolated settings, keyring and server; message boxes recorded instead of shown."""
+def env(qapp, tmp_path, monkeypatch, fake_s3, isolated_settings):
+    """Isolated settings and server; message boxes recorded instead of shown."""
     monkeypatch.setattr(flow, "cloud_config", lambda: fake_s3.cfg)
     monkeypatch.setattr(flow.config, "backups_dir", lambda: tmp_path)
     messages = []
@@ -57,7 +55,6 @@ def test_tooltip_text(last, text):
 
 def test_back_up_uploads_and_records_success(env, conn, add):
     add()
-    cloud_backup.save_passphrase("passphrase1")
     window, ctl = controller(conn)
     ctl.back_up()
     wait_until(lambda: env.messages)
@@ -69,7 +66,6 @@ def test_back_up_uploads_and_records_success(env, conn, add):
 
 
 def test_failure_reports_and_keeps_last_success(env, conn):
-    cloud_backup.save_passphrase("passphrase1")
     env.fail_with = (500, "InternalError")
     window, ctl = controller(conn)
     ctl.back_up()
@@ -92,7 +88,6 @@ def _blocked_upload(monkeypatch):
 
 
 def test_double_press_uploads_once(env, conn, monkeypatch):
-    cloud_backup.save_passphrase("passphrase1")
     release, calls = _blocked_upload(monkeypatch)
     window, ctl = controller(conn)
     ctl.back_up()
@@ -104,7 +99,6 @@ def test_double_press_uploads_once(env, conn, monkeypatch):
 
 
 def test_window_closed_during_upload_does_not_crash(env, conn, monkeypatch):
-    cloud_backup.save_passphrase("passphrase1")
     release, calls = _blocked_upload(monkeypatch)
     window, ctl = controller(conn)
     ctl.back_up()
@@ -121,7 +115,6 @@ def test_window_closed_during_upload_does_not_crash(env, conn, monkeypatch):
 
 
 def test_replaced_window_that_still_exists_stays_quiet(env, conn, add):
-    cloud_backup.save_passphrase("passphrase1")
     old_window, old_ctl = controller(conn)           # not deleted yet (still referenced)
     new_window, new_ctl = controller(conn)
     old_ctl.back_up()
@@ -130,11 +123,12 @@ def test_replaced_window_that_still_exists_stays_quiet(env, conn, add):
     assert env.messages == [("info", "Backup uploaded to the cloud.")]
 
 
-def test_not_set_up_non_admin_gets_message(env, conn):
+def test_anyone_can_back_up_without_setup(env, conn):
     window, ctl = controller(conn, CLERK)
     ctl.back_up()
-    assert env.messages == [("error", "Cloud backup is not set up on this computer. Ask an administrator.")]
-    assert not env.requests
+    wait_until(lambda: env.messages)
+    assert env.messages == [("info", "Backup uploaded to the cloud.")]
+    assert len(env.store) == 1
 
 
 def test_no_keys_message(env, conn, monkeypatch):
@@ -144,35 +138,11 @@ def test_no_keys_message(env, conn, monkeypatch):
     assert env.messages == [("error", "Cloud backup is not available in this version of MedTracker.")]
 
 
-@pytest.mark.parametrize("first,second,error", [
-    ("passphrase1", "passphrase2", "Passphrases do not match."),
-    ("short", "short", "Use at least 8 characters for the passphrase."),
-    ("", "", "Use at least 8 characters for the passphrase."),
-])
-def test_setup_rejects_bad_passphrase(env, first, second, error):
-    dialog = CloudSetupDialog()
-    dialog.passphrase.setText(first)
-    dialog.confirm.setText(second)
-    assert dialog.save() == error
-    assert cloud_backup.load_passphrase() == ""
-
-
-def test_setup_saves_passphrase_and_blank_keeps_it(env):
-    dialog = CloudSetupDialog()
-    dialog.passphrase.setText("passphrase1")
-    dialog.confirm.setText("passphrase1")
-    assert dialog.save() == ""
-    assert cloud_backup.load_passphrase() == "passphrase1"
-    again = CloudSetupDialog()                        # reopened: leaving it blank keeps it
-    assert again.save() == ""
-    assert cloud_backup.load_passphrase() == "passphrase1"
-
-
 def test_main_window_button_and_menu(env, conn, tmp_path):
     from ui.main_window import MainWindow
     window = MainWindow(conn, tmp_path / "x.db", ADMIN)
     texts = [a.text() for a in window.menuBar().actions()[0].menu().actions()]
-    assert "Back up to cloud" in texts and "Cloud backup setup..." in texts
+    assert "Back up to cloud" in texts and "Cloud backup setup..." not in texts
     assert window.cloud.button.text() == "☁ Back up"
     window.signing_out = True
     window.close()
@@ -191,7 +161,6 @@ def test_demo_mode_has_no_button(env, conn, tmp_path):
 # --- before an update ------------------------------------------------------------
 
 def test_upload_now_uploads_and_records(env, conn, tmp_path):
-    cloud_backup.save_passphrase("passphrase1")
     db.backup_to(conn, tmp_path / "before-update.db")
     assert flow.upload_now(tmp_path / "before-update.db") == ""
     assert len(env.store) == 1
@@ -199,17 +168,14 @@ def test_upload_now_uploads_and_records(env, conn, tmp_path):
     assert (tmp_path / "before-update.db").exists()      # the local backup is kept
 
 
-def test_upload_now_skips_when_not_set_up(env, conn, tmp_path, monkeypatch):
+def test_upload_now_skips_without_keys(env, conn, tmp_path, monkeypatch):
     db.backup_to(conn, tmp_path / "b.db")
-    assert flow.upload_now(tmp_path / "b.db") is None     # no passphrase
-    cloud_backup.save_passphrase("passphrase1")
     monkeypatch.setattr(flow, "cloud_config", lambda: None)
     assert flow.upload_now(tmp_path / "b.db") is None     # no keys
     assert not env.requests
 
 
 def test_upload_now_reports_failure(env, conn, tmp_path):
-    cloud_backup.save_passphrase("passphrase1")
     env.fail_with = (500, "InternalError")
     db.backup_to(conn, tmp_path / "b.db")
     assert flow.upload_now(tmp_path / "b.db") == \
@@ -229,7 +195,6 @@ def _update_window(env, conn, tmp_path, monkeypatch, demo=False):
 
 
 def test_update_uploads_to_cloud_before_installing(env, conn, tmp_path, monkeypatch):
-    cloud_backup.save_passphrase("passphrase1")
     window, started = _update_window(env, conn, tmp_path, monkeypatch)
     assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
     assert started == [1]                                 # the upload happened first
@@ -239,7 +204,6 @@ def test_update_uploads_to_cloud_before_installing(env, conn, tmp_path, monkeypa
 
 def test_update_asks_when_cloud_backup_fails(env, conn, tmp_path, monkeypatch):
     from ui import update_flow
-    cloud_backup.save_passphrase("passphrase1")
     env.fail_with = (500, "InternalError")
     asked = []
     monkeypatch.setattr(update_flow, "ask_yes_no", lambda parent, text, **k: asked.append(text) or False)
@@ -253,7 +217,6 @@ def test_update_asks_when_cloud_backup_fails(env, conn, tmp_path, monkeypatch):
 
 
 def test_update_on_close_installs_even_if_cloud_fails(env, conn, tmp_path, monkeypatch):
-    cloud_backup.save_passphrase("passphrase1")
     env.fail_with = (500, "InternalError")
     window, started = _update_window(env, conn, tmp_path, monkeypatch)
     assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
@@ -262,7 +225,8 @@ def test_update_on_close_installs_even_if_cloud_fails(env, conn, tmp_path, monke
     window.close()
 
 
-def test_update_without_cloud_setup_installs_as_before(env, conn, tmp_path, monkeypatch):
+def test_update_without_keys_installs_as_before(env, conn, tmp_path, monkeypatch):
+    monkeypatch.setattr(flow, "cloud_config", lambda: None)
     window, started = _update_window(env, conn, tmp_path, monkeypatch)
     assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
     assert started == [0] and not env.requests
@@ -271,7 +235,6 @@ def test_update_without_cloud_setup_installs_as_before(env, conn, tmp_path, monk
 
 
 def test_demo_update_never_uploads(env, conn, tmp_path, monkeypatch):
-    cloud_backup.save_passphrase("passphrase1")
     window, started = _update_window(env, conn, tmp_path, monkeypatch, demo=True)
     assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
     assert started == [0] and not env.requests

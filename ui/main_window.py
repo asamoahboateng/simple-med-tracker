@@ -21,7 +21,7 @@ from ui.audit import AuditPage
 from ui import cloud_backup_flow
 from cloud_backup import cloud_config
 from ui.cloud_backup_flow import NOT_AVAILABLE, CloudBackupController
-from ui.cloud_settings import CloudRestoreDialog, CloudSetupDialog
+from ui.cloud_settings import CloudRestoreDialog
 from ui.dashboard import DashboardPage
 from ui.dispense import DispenseDialog
 from ui.log import LogPage
@@ -444,8 +444,6 @@ class MainWindow(QMainWindow):
             self._action(file_menu, "Restore from backup...", self.restore_database)
             if self.cloud:
                 self._action(file_menu, "Restore from cloud backup...", self.restore_from_cloud)
-                self._action(file_menu, "Cloud backup setup...",
-                             lambda: CloudSetupDialog(self).exec())
         file_menu.addSeparator()
         self._action(file_menu, "Open data folder", self.open_data_folder)
         file_menu.addSeparator()

@@ -11,8 +11,8 @@ openpyxl==3.1.5
 # Finds the correct per-user data folder on Windows / macOS / Linux
 platformdirs==4.12.1
 
-# Encrypts cloud backups (AES-GCM) before they leave the computer
+# Opens cloud backups made by MedTracker 1.4.x, which were encrypted (AES-GCM)
 cryptography==50.0.2
 
-# Stores the cloud backup passphrase in Windows Credential Manager / macOS Keychain
+# Reads the passphrase 1.4.x saved in Windows Credential Manager / macOS Keychain (for those backups)
 keyring==25.7.0
