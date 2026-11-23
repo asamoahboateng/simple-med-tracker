@@ -201,3 +201,79 @@ def test_version_2_database_gains_the_code_column(tmp_path):
     old.close()
     conn = db.connect(path)
     assert db.find_user(conn, "ama")["pin_hash"] == ""
+
+
+# --- permission to delete medicines ------------------------------------------------
+
+def test_only_superadmin_may_delete_medicines_by_default(conn):
+    make_user(conn)
+    clerk = auth.sign_in(conn, "ama", "secret-pass")
+    admin_id = make_user(conn, "kofi", "Kofi Asante", role=auth.USERADMIN)
+    admin = auth.User(admin_id, "kofi", "Kofi Asante", auth.USERADMIN)
+    assert auth.can_delete_medicines(conn, auth.SUPERADMIN_USER)
+    assert not auth.can_delete_medicines(conn, clerk)
+    assert not auth.can_delete_medicines(conn, admin)          # user admins need it too
+
+
+def test_superadmin_gives_and_takes_the_permission(conn):
+    user_id = make_user(conn)
+    clerk = auth.sign_in(conn, "ama", "secret-pass")
+    auth.set_delete_permission(conn, auth.SUPERADMIN_USER, user_id, True)
+    assert auth.can_delete_medicines(conn, clerk)
+    assert [r["delete_text"] for r in auth.user_rows(conn)] == ["Yes"]
+    auth.set_delete_permission(conn, auth.SUPERADMIN_USER, user_id, False)
+    assert not auth.can_delete_medicines(conn, clerk)            # takes effect at once
+    assert [r["delete_text"] for r in auth.user_rows(conn)] == ["No"]
+
+
+def test_only_superadmin_can_give_the_permission(conn):
+    admin_id = make_user(conn, "kofi", "Kofi Asante", role=auth.USERADMIN)
+    user_id = make_user(conn)
+    admin = auth.User(admin_id, "kofi", "Kofi Asante", auth.USERADMIN)
+    with pytest.raises(auth.AuthError, match="Only the superadmin can allow deleting medicines."):
+        auth.set_delete_permission(conn, admin, user_id, True)
+    assert not db.get_user(conn, user_id)["can_delete_medicines"]
+
+
+def test_revoked_user_cannot_delete(conn):
+    user_id = make_user(conn)
+    clerk = auth.sign_in(conn, "ama", "secret-pass")
+    auth.set_delete_permission(conn, auth.SUPERADMIN_USER, user_id, True)
+    auth.revoke(conn, auth.SUPERADMIN_USER, user_id)
+    assert not auth.can_delete_medicines(conn, clerk)
+
+
+def test_version_7_database_gets_the_permission_column(tmp_path):
+    path = tmp_path / "v7.db"
+    conn = db.connect(path)
+    make_user(conn)
+    conn.execute("ALTER TABLE users DROP COLUMN can_delete_medicines")
+    conn.execute("PRAGMA user_version = 7")
+    conn.commit()
+    conn.close()
+    conn = db.connect(path)
+    assert db.get_user(conn, 1)["can_delete_medicines"] == 0
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 8
+
+
+def test_users_page_toggles_the_permission(qapp, conn):
+    from ui.users import UsersPage
+    user_id = make_user(conn)
+    page = UsersPage(conn, auth.SUPERADMIN_USER)
+    page.refresh()
+    page.view.selectRow(0)
+    assert not page.delete_btn.isHidden() and page.delete_btn.isEnabled()
+    assert page.delete_btn.text() == "Allow deleting medicines"
+    page.toggle_delete_permission()
+    assert db.get_user(conn, user_id)["can_delete_medicines"] == 1
+    page.view.selectRow(0)
+    assert page.delete_btn.text() == "Stop deleting medicines"
+    page.toggle_delete_permission()
+    assert db.get_user(conn, user_id)["can_delete_medicines"] == 0
+
+
+def test_users_page_hides_the_button_from_user_admins(qapp, conn):
+    from ui.users import UsersPage
+    admin_id = make_user(conn, "kofi", "Kofi Asante", role=auth.USERADMIN)
+    page = UsersPage(conn, auth.User(admin_id, "kofi", "Kofi Asante", auth.USERADMIN))
+    assert page.delete_btn.isHidden()

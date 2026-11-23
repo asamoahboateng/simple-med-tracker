@@ -19,6 +19,7 @@ USER_COLUMNS = [
     Column("role_name", "Role"),
     Column("status_name", "Status", "center"),
     Column("pin_text", "Sign-in code", "center"),
+    Column("delete_text", "Can delete medicines", "center"),
     Column("created_at", "Registered"),
     Column("decided_by", "Approved / revoked by"),
     Column("decided_at", "On"),
@@ -87,6 +88,10 @@ class UsersPage(QWidget):
         self.approve_btn = make_button("Approve", "primary")
         self.revoke_btn = make_button("Revoke access", "danger")
         self.role_btn = make_button("Make user admin")
+        self.delete_btn = make_button("Allow deleting medicines")
+        self.delete_btn.setToolTip("Only medicines with no stock and nothing in the log can be "
+                                   "deleted. The superadmin can always delete them.")
+        self.delete_btn.clicked.connect(self.toggle_delete_permission)
         self.password_btn = make_button("Set new password")
         self.pin_btn = make_button("Remove sign-in code")
         self.pin_btn.setToolTip("Use this if someone else may know their 6-digit code. "
@@ -97,6 +102,7 @@ class UsersPage(QWidget):
         self.role_btn.clicked.connect(self.toggle_role)
         self.password_btn.clicked.connect(self.set_password)
         self.role_btn.setVisible(user.role == auth.SUPERADMIN)
+        self.delete_btn.setVisible(user.role == auth.SUPERADMIN)
 
         card = Card("Accounts")
         if user.role == auth.USERADMIN:
@@ -108,8 +114,8 @@ class UsersPage(QWidget):
         card.body.addWidget(self.view)
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 4, 0, 0)
-        for button in (self.approve_btn, self.revoke_btn, self.role_btn, self.password_btn,
-                       self.pin_btn):
+        for button in (self.approve_btn, self.revoke_btn, self.role_btn, self.delete_btn,
+                       self.password_btn, self.pin_btn):
             bar.addWidget(button)
         bar.addStretch()
         card.body.addLayout(bar)
@@ -152,6 +158,9 @@ class UsersPage(QWidget):
         self.role_btn.setEnabled(manageable and status == auth.ACTIVE)
         self.role_btn.setText("Make regular user" if row and row["role"] == auth.USERADMIN
                               else "Make user admin")
+        self.delete_btn.setEnabled(manageable and status == auth.ACTIVE)
+        self.delete_btn.setText("Stop deleting medicines" if row and row["can_delete"]
+                                else "Allow deleting medicines")
 
     def _done(self):
         self.refresh()
@@ -192,6 +201,17 @@ class UsersPage(QWidget):
         new_role = auth.USER if row["role"] == auth.USERADMIN else auth.USERADMIN
         try:
             auth.set_role(self.conn, self.user, row["id"], new_role)
+        except auth.AuthError as exc:
+            show_error(self, str(exc))
+            return
+        self._done()
+
+    def toggle_delete_permission(self):
+        row = self._selected()
+        if row is None:
+            return
+        try:
+            auth.set_delete_permission(self.conn, self.user, row["id"], not row["can_delete"])
         except auth.AuthError as exc:
             show_error(self, str(exc))
             return

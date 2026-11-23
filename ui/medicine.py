@@ -67,10 +67,11 @@ class NewMedicineDialog(QDialog):
 class EditMedicineDialog(QDialog):
     """Edit a medicine's name, unit, reorder level and note."""
 
-    def __init__(self, conn, medicine: dict, parent=None):
+    def __init__(self, conn, medicine: dict, parent=None, can_delete=lambda: False):
         super().__init__(parent)
         self.conn = conn
         self.medicine = medicine
+        self.can_delete = can_delete   # whether the signed-in user may delete medicines (asked fresh)
         self.setWindowTitle("Edit Medicine")
         self.setMinimumWidth(520)
 
@@ -105,6 +106,7 @@ class EditMedicineDialog(QDialog):
             self.delete_button.setEnabled(False)
             self.delete_button.setToolTip("A medicine can only be deleted when it has no stock and "
                                           "nothing in the log.")
+        self.delete_button.setVisible(can_delete())   # only for those with the permission
         button_row = QHBoxLayout()                 # Delete on its own at the left, away from Save
         button_row.addWidget(self.delete_button)
         button_row.addStretch(1)
@@ -131,6 +133,9 @@ class EditMedicineDialog(QDialog):
 
     def delete_medicine(self):
         name = self.medicine["name"]
+        if not self.can_delete():
+            show_error(self, "You no longer have permission to delete medicines.")
+            return
         if not ask_yes_no(self, f"Delete '{name}'?\n\nIt has no stock and nothing in the log. "
                           f"This cannot be undone.", title="Delete medicine",
                           yes_text="Delete", no_text="Cancel"):

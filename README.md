@@ -394,7 +394,9 @@ If MedTracker runs from source, or on a Mac or Linux, it tells you a new version
   Other values are calculated and can't be edited.
 - **Delete a medicine**: double-click it on Stock & Batches and click **Delete medicine**, then
   confirm. Only a medicine with no stock and nothing in the log can be deleted (e.g. one added by
-  mistake); for any other the button is greyed out, so no history is ever lost.
+  mistake); for any other the button is greyed out, so no history is ever lost. Only the
+  superadmin, and anyone the superadmin allows (**Users → Allow deleting medicines**), sees the
+  button.
 - **Colours**: **View → Colour theme** switches between Bottle green, Navy, Ocean blue, Teal,
   Plum and Charcoal. The change applies at once and is remembered on that computer. Red, amber
   and green keep their meaning (expired, expiring, OK) in every theme.

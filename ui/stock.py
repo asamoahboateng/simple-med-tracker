@@ -66,10 +66,11 @@ class StockPage(QWidget):
     new_medicine_requested = Signal()
     units_requested = Signal()
 
-    def __init__(self, conn, parent=None, user_name: str = ""):
+    def __init__(self, conn, parent=None, user_name: str = "", can_delete=lambda: False):
         super().__init__(parent)
         self.conn = conn
         self.user_name = user_name   # recorded in the audit log if a batch's quantity changes
+        self.can_delete = can_delete  # may the signed-in user delete medicines? (asked fresh)
 
         # --- medicines ---
         self.med_model = RecordTableModel(MEDICINE_COLUMNS)
@@ -168,7 +169,7 @@ class StockPage(QWidget):
     def _edit_medicine(self, index):
         """Double-clicking a medicine opens the Edit Medicine pop-up."""
         row = self.med_model.row_dict(self.med_proxy.mapToSource(index).row())
-        if EditMedicineDialog(self.conn, row, self).exec():
+        if EditMedicineDialog(self.conn, row, self, can_delete=self.can_delete).exec():
             self.data_changed.emit()
 
     def _edit_batch(self, index):

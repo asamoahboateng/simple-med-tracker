@@ -62,7 +62,8 @@ class MainWindow(QMainWindow):
         self.search_page = SearchPage(conn, user_name=user.display_name)
         self.log_page = LogPage(conn, user_name=user.display_name)
         self.audit_page = AuditPage(conn)
-        self.stock_page = StockPage(conn, user_name=user.display_name)
+        self.stock_page = StockPage(conn, user_name=user.display_name,
+                                    can_delete=lambda: auth.can_delete_medicines(conn, self.user))
         self.report_page = ReportPage(conn)
         self.pages = [
             ("Dashboard", "dashboard", self.dashboard),

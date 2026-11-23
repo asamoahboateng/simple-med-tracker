@@ -28,7 +28,7 @@ from pathlib import Path
 
 from config import COMMON_UNITS
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 PRE_LOGIN_ENTERED_BY = "Before sign-in"
 
 TRANSACTIONS_TABLE = """
@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name     TEXT    NOT NULL,
     password_hash TEXT    NOT NULL,
     pin_hash      TEXT    NOT NULL DEFAULT '',   -- optional 6-digit sign-in code
+    can_delete_medicines INTEGER NOT NULL DEFAULT 0,   -- given by the superadmin
     role          TEXT    NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'useradmin')),
     status        TEXT    NOT NULL DEFAULT 'pending'
                           CHECK (status IN ('pending', 'active', 'revoked')),
@@ -169,6 +170,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if user_columns and "pin_hash" not in user_columns:
         # Version 2 had passwords only: add the optional 6-digit sign-in code.
         conn.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT NOT NULL DEFAULT ''")
+    if user_columns and "can_delete_medicines" not in user_columns:
+        # Version 7 had no permission to delete medicines (nobody but the superadmin has it).
+        conn.execute("ALTER TABLE users ADD COLUMN can_delete_medicines INTEGER NOT NULL DEFAULT 0")
     medicine_columns = {r["name"] for r in conn.execute("PRAGMA table_info(medicines)")}
     if medicine_columns and "note" not in medicine_columns:
         # Version 4 had no medicine notes.
@@ -699,6 +703,10 @@ def set_user_status(conn, user_id: int, status: str, decided_by: str, decided_at
 
 def set_user_role(conn, user_id: int, role: str) -> None:
     conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+
+
+def set_user_delete_permission(conn, user_id: int, allowed: bool) -> None:
+    conn.execute("UPDATE users SET can_delete_medicines = ? WHERE id = ?", (int(allowed), user_id))
 
 
 def set_user_password(conn, user_id: int, password_hash: str) -> None:

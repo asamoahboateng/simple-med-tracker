@@ -76,7 +76,7 @@ def dialog_for(qapp, conn, monkeypatch):
         monkeypatch.setattr(ui_medicine, "ask_yes_no",
                             lambda parent, text, **k: asked.append((text, k)) or answer)
         row = next(r for r in logic.medicine_rows(conn) if r["name"] == name)
-        return ui_medicine.EditMedicineDialog(conn, row)
+        return ui_medicine.EditMedicineDialog(conn, row, can_delete=lambda: True)
     make.asked, make.infos = asked, infos
     return make
 
@@ -107,3 +107,26 @@ def test_delete_confirmed(dialog_for, conn):
     assert db.find_medicine(conn, "Paracetamol") is None
     assert dialog_for.infos == ["'Paracetamol' was deleted."]
     assert dialog.result() == QDialog.DialogCode.Accepted
+
+
+def test_delete_button_hidden_without_permission(qapp, conn):
+    from ui.medicine import EditMedicineDialog
+    logic.create_medicine(conn, "Paracetamol", "tablets")
+    row = logic.medicine_rows(conn)[0]
+    assert EditMedicineDialog(conn, row, can_delete=lambda: False).delete_button.isHidden()
+    assert not EditMedicineDialog(conn, row, can_delete=lambda: True).delete_button.isHidden()
+
+
+def test_permission_checked_again_when_deleting(dialog_for, conn, monkeypatch):
+    from ui import medicine as ui_medicine
+    logic.create_medicine(conn, "Paracetamol", "tablets")
+    allowed = [True]
+    errors = []
+    monkeypatch.setattr(ui_medicine, "show_error", lambda parent, text, title="": errors.append(text))
+    row = logic.medicine_rows(conn)[0]
+    monkeypatch.setattr(ui_medicine, "ask_yes_no", lambda *a, **k: True)
+    dialog = ui_medicine.EditMedicineDialog(conn, row, can_delete=lambda: allowed[0])
+    allowed[0] = False                                   # the superadmin took it away meanwhile
+    dialog.delete_medicine()
+    assert errors == ["You no longer have permission to delete medicines."]
+    assert db.find_medicine(conn, "Paracetamol") is not None

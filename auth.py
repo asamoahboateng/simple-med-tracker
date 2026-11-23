@@ -236,6 +236,23 @@ def set_role(conn, actor: User, user_id: int, role: str) -> None:
     db.set_user_role(conn, user_id, role)
 
 
+def can_delete_medicines(conn, user: User) -> bool:
+    """The superadmin always may; others only with the permission (read fresh, so a change
+    takes effect at once) and while their access is active."""
+    if user.role == SUPERADMIN:
+        return True
+    row = db.get_user(conn, user.id)
+    return row is not None and row["status"] == ACTIVE and bool(row["can_delete_medicines"])
+
+
+def set_delete_permission(conn, actor: User, user_id: int, allowed: bool) -> None:
+    """Give or take away the permission to delete medicines (superadmin only)."""
+    if actor.role != SUPERADMIN:
+        raise AuthError("Only the superadmin can allow deleting medicines.")
+    _target(conn, actor, user_id)
+    db.set_user_delete_permission(conn, user_id, allowed)
+
+
 def set_password(conn, actor: User, user_id: int, password: str, confirm: str) -> None:
     """An administrator sets a new password, e.g. when a user has forgotten theirs."""
     _target(conn, actor, user_id)
@@ -280,6 +297,8 @@ def user_rows(conn) -> list[dict]:
         "role": r["role"], "role_name": ROLE_NAMES[r["role"]],
         "status": r["status"], "status_name": STATUS_NAMES[r["status"]],
         "has_pin": bool(r["pin_hash"]), "pin_text": "Set" if r["pin_hash"] else "None",
+        "can_delete": bool(r["can_delete_medicines"]),
+        "delete_text": "Yes" if r["can_delete_medicines"] else "No",
         "created_at": r["created_at"], "decided_by": r["decided_by"],
         "decided_at": r["decided_at"],
     } for r in db.list_users(conn)]
