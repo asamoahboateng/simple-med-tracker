@@ -73,7 +73,11 @@ mc ilm rule add kalour/medtracker-inventory --expire-days 365 --noncurrent-expir
 - **GitHub Actions:** add two repository secrets (Settings → Secrets and variables → Actions):
   `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY`, with the values from `.env`.
 
-A build without keys still works. The button then says cloud backup is not available.
+Before anything is built, the workflow checks the keys (`scripts/check_cloud_keys.py`): they
+must be set and MinIO must accept them (one read-only request). A release (tag push) stops there
+if they don't, with the reason in the log. A manual run from the Actions tab only warns about
+missing keys. Local builds without keys still work; the button then says cloud backup is not
+available.
 
 ## If a key leaks
 

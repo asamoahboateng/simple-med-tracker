@@ -45,8 +45,28 @@ jobs:
       matrix: ${{ steps.pick.outputs.matrix }}
     steps:
       - name: Check out code
-        if: github.event_name == 'push'
         uses: actions/checkout@v4
+
+      # Before anything is built: the MinIO keys for cloud backup must be set and must work.
+      # A release (tag push) stops here if they don't; a manual run only warns when they are
+      # missing, since it publishes nothing.
+      - name: Set up Python for the key check
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the MinIO keys
+        env:
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python -m pip install -q "$(grep -i '^platformdirs==' requirements.txt)"
+          if [ "$EVENT" = "push" ]; then
+            python scripts/check_cloud_keys.py
+          else
+            python scripts/check_cloud_keys.py --allow-missing
+          fi
 
       - name: Pick platforms
         id: pick
