@@ -122,3 +122,40 @@ def fake_s3():
                         "test-access", "test-secret-value")
     yield fake
     httpd.shutdown()
+
+
+@pytest.fixture
+def memory_keyring():
+    """A password store kept in memory, so tests never touch the real Keychain / Credential Manager."""
+    import keyring
+    from keyring.backend import KeyringBackend
+
+    class Backend(KeyringBackend):
+        priority = 1
+
+        def __init__(self):
+            super().__init__()
+            self.values = {}
+
+        def get_password(self, service, username):
+            return self.values.get((service, username))
+
+        def set_password(self, service, username, password):
+            self.values[(service, username)] = password
+
+        def delete_password(self, service, username):
+            self.values.pop((service, username), None)
+
+    previous = keyring.get_keyring()
+    keyring.set_keyring(Backend())
+    yield
+    keyring.set_keyring(previous)
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """One QApplication for the widget tests, without opening windows on screen."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])

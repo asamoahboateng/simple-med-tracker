@@ -17,6 +17,8 @@ import config
 import db
 from ui.add_stock import AddStockDialog
 from ui.audit import AuditPage
+from ui.cloud_backup_flow import CloudBackupController
+from ui.cloud_settings import CloudSetupDialog
 from ui.dashboard import DashboardPage
 from ui.dispense import DispenseDialog
 from ui.log import LogPage
@@ -85,6 +87,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_sidebar())
         # right side: the "update available" bar above the pages
         self.updates = UpdateController(self)
+        # The ☁ Back up button (menu bar, next to the text size buttons); none in demo mode.
+        self.cloud = None if demo else CloudBackupController(self, conn, user)
         right = QWidget()
         right_col = QVBoxLayout(right)
         right_col.setContentsMargins(0, 0, 0, 0)
@@ -372,6 +376,9 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 12, 0)
         row.setSpacing(12)
+        if self.cloud:
+            row.addWidget(self.cloud.button)
+            row.addSpacing(8)
         for text, tip, slot in (
                 ("A−", "Smaller text (Ctrl+−)", lambda: self.change_zoom(theme.step_zoom(-1))),
                 (f"{round(theme.zoom * 100)}%", "Normal text size (Ctrl+0)", lambda: self.change_zoom(1.0)),
@@ -426,9 +433,14 @@ class MainWindow(QMainWindow):
         bar = self.menuBar()
         file_menu = bar.addMenu("&File")
         self._action(file_menu, "Backup database...", self.backup_database, "Ctrl+B")
+        if self.cloud:
+            self._action(file_menu, "Back up to cloud", self.cloud.back_up, "Ctrl+Shift+B")
         if self.user.is_admin:
             # Restoring replaces the user accounts too, so only administrators may do it.
             self._action(file_menu, "Restore from backup...", self.restore_database)
+            if self.cloud:
+                self._action(file_menu, "Cloud backup setup...",
+                             lambda: CloudSetupDialog(self).exec())
         file_menu.addSeparator()
         self._action(file_menu, "Open data folder", self.open_data_folder)
         file_menu.addSeparator()

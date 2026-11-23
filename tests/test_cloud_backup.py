@@ -38,9 +38,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import keyring
-from keyring.backend import KeyringBackend
-
 import cloud_backup
 from cloud_backup import (
     cloud_config, download_backup, list_backups, load_passphrase, object_key, save_passphrase, slug,
@@ -48,31 +45,6 @@ from cloud_backup import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-
-
-class MemoryKeyring(KeyringBackend):
-    priority = 1
-
-    def __init__(self):
-        super().__init__()
-        self.values = {}
-
-    def get_password(self, service, username):
-        return self.values.get((service, username))
-
-    def set_password(self, service, username, password):
-        self.values[(service, username)] = password
-
-    def delete_password(self, service, username):
-        self.values.pop((service, username), None)
-
-
-@pytest.fixture
-def memory_keyring():
-    previous = keyring.get_keyring()
-    keyring.set_keyring(MemoryKeyring())
-    yield
-    keyring.set_keyring(previous)
 
 
 @pytest.mark.parametrize("raw,expected", [
