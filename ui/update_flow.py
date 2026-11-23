@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QProgressDialog
 import config
 import db
 import updater
+from ui.cloud_backup_flow import upload_now
 from ui.update_bar import UpdateBar
 from ui.widgets import ask_yes_no, show_error, show_info
 
@@ -209,7 +210,7 @@ class UpdateController(QObject):
             return
         installer = self._download(manifest)
         if installer is not None:
-            self._backup_and_install(installer)
+            self._backup_and_install(installer, interactive=True)
 
     def install_on_close(self) -> None:
         global _pending
@@ -250,7 +251,7 @@ class UpdateController(QObject):
                        f"running the installer yourself:\n{installer}", title="Install by hand")
             return
         if self._confirm(manifest):
-            self._backup_and_install(installer)
+            self._backup_and_install(installer, interactive=True)
 
     # --- the work ---------------------------------------------------------------
     def _download(self, manifest):
@@ -280,12 +281,19 @@ class UpdateController(QObject):
                        title="Update failed")
         return None
 
-    def _backup_and_install(self, installer, quit_after: bool = True) -> bool:
-        """Back up the data, start the installer, and (normally) close MedTracker."""
+    def _backup_and_install(self, installer, quit_after: bool = True,
+                            interactive: bool = False) -> bool:
+        """
+        Back up the data (here and, when set up, to the cloud), start the installer, and
+        (normally) close MedTracker. `interactive`: someone clicked Install, so a failed cloud
+        backup asks whether to go on; otherwise (installing on close) it is only logged.
+        """
         try:
             stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            db.backup_to(self.window.conn, config.backups_dir()
-                         / f"before-update-{self.current_version}-{stamp}.db")
+            backup = config.backups_dir() / f"before-update-{self.current_version}-{stamp}.db"
+            db.backup_to(self.window.conn, backup)
+            if not self._cloud_backup(backup, interactive):
+                return False
             updater.run_installer(installer)
         except (updater.UpdateError, OSError, sqlite3.Error) as exc:
             log.exception("Update install failed")
@@ -296,6 +304,24 @@ class UpdateController(QObject):
         if quit_after:
             self._clear_pending()
             self.window.close()          # closes the database and quits
+        return True
+
+    def _cloud_backup(self, backup, interactive: bool) -> bool:
+        """Upload the pre-update backup. False when the user chose not to install after all."""
+        if getattr(self.window, "demo", False):
+            return True
+        self.window.statusBar().showMessage("Backing up to the cloud before the update...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            error = upload_now(backup)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.window.statusBar().clearMessage()
+        if error and interactive:
+            return ask_yes_no(
+                self.window, f"Cloud backup failed: {error}\n\nYour data was still backed up on "
+                f"this computer.\n\nInstall the update anyway?", title="Cloud backup failed",
+                yes_text="Install", no_text="Cancel")
         return True
 
     def _clear_pending(self) -> None:

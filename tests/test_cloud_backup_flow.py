@@ -8,6 +8,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QWidget
 
 import auth
+import db
 import cloud_backup
 from ui import cloud_backup_flow as flow
 from ui.cloud_settings import CloudSetupDialog
@@ -183,5 +184,96 @@ def test_demo_mode_has_no_button(env, conn, tmp_path):
     texts = [a.text() for a in window.menuBar().actions()[0].menu().actions()]
     assert "Back up to cloud" not in texts and "Cloud backup setup..." not in texts
     assert window.cloud is None
+    window.signing_out = True
+    window.close()
+
+
+# --- before an update ------------------------------------------------------------
+
+def test_upload_now_uploads_and_records(env, conn, tmp_path):
+    cloud_backup.save_passphrase("passphrase1")
+    db.backup_to(conn, tmp_path / "before-update.db")
+    assert flow.upload_now(tmp_path / "before-update.db") == ""
+    assert len(env.store) == 1
+    assert flow.last_success() is not None
+    assert (tmp_path / "before-update.db").exists()      # the local backup is kept
+
+
+def test_upload_now_skips_when_not_set_up(env, conn, tmp_path, monkeypatch):
+    db.backup_to(conn, tmp_path / "b.db")
+    assert flow.upload_now(tmp_path / "b.db") is None     # no passphrase
+    cloud_backup.save_passphrase("passphrase1")
+    monkeypatch.setattr(flow, "cloud_config", lambda: None)
+    assert flow.upload_now(tmp_path / "b.db") is None     # no keys
+    assert not env.requests
+
+
+def test_upload_now_reports_failure(env, conn, tmp_path):
+    cloud_backup.save_passphrase("passphrase1")
+    env.fail_with = (500, "InternalError")
+    db.backup_to(conn, tmp_path / "b.db")
+    assert flow.upload_now(tmp_path / "b.db") == \
+        "The backup server had a problem (InternalError). Try again later."
+    assert flow.last_success() is None
+
+
+def _update_window(env, conn, tmp_path, monkeypatch, demo=False):
+    from ui import update_flow
+    from ui.main_window import MainWindow
+    started = []
+    monkeypatch.setattr(update_flow.updater, "run_installer",
+                        lambda installer: started.append(len(env.store)))
+    monkeypatch.setattr(update_flow.config, "backups_dir", lambda: tmp_path)
+    window = MainWindow(conn, tmp_path / "x.db", ADMIN, demo=demo)
+    return window, started
+
+
+def test_update_uploads_to_cloud_before_installing(env, conn, tmp_path, monkeypatch):
+    cloud_backup.save_passphrase("passphrase1")
+    window, started = _update_window(env, conn, tmp_path, monkeypatch)
+    assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
+    assert started == [1]                                 # the upload happened first
+    window.signing_out = True
+    window.close()
+
+
+def test_update_asks_when_cloud_backup_fails(env, conn, tmp_path, monkeypatch):
+    from ui import update_flow
+    cloud_backup.save_passphrase("passphrase1")
+    env.fail_with = (500, "InternalError")
+    asked = []
+    monkeypatch.setattr(update_flow, "ask_yes_no", lambda parent, text, **k: asked.append(text) or False)
+    window, started = _update_window(env, conn, tmp_path, monkeypatch)
+    assert not window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False,
+                                                  interactive=True)
+    assert "Cloud backup failed" in asked[0] and "Install the update anyway?" in asked[0]
+    assert started == []                                  # answered No: nothing installed
+    window.signing_out = True
+    window.close()
+
+
+def test_update_on_close_installs_even_if_cloud_fails(env, conn, tmp_path, monkeypatch):
+    cloud_backup.save_passphrase("passphrase1")
+    env.fail_with = (500, "InternalError")
+    window, started = _update_window(env, conn, tmp_path, monkeypatch)
+    assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
+    assert started == [0]
+    window.signing_out = True
+    window.close()
+
+
+def test_update_without_cloud_setup_installs_as_before(env, conn, tmp_path, monkeypatch):
+    window, started = _update_window(env, conn, tmp_path, monkeypatch)
+    assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
+    assert started == [0] and not env.requests
+    window.signing_out = True
+    window.close()
+
+
+def test_demo_update_never_uploads(env, conn, tmp_path, monkeypatch):
+    cloud_backup.save_passphrase("passphrase1")
+    window, started = _update_window(env, conn, tmp_path, monkeypatch, demo=True)
+    assert window.updates._backup_and_install(tmp_path / "setup.exe", quit_after=False)
+    assert started == [0] and not env.requests
     window.signing_out = True
     window.close()

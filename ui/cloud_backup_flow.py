@@ -78,6 +78,24 @@ def _relay() -> _Relay:
     return _relay_object
 
 
+def upload_now(snapshot) -> str | None:
+    """
+    Upload the database copy at `snapshot` right away (used before an update; the copy is
+    kept). None when cloud backup isn't set up on this computer, "" when it worked, otherwise
+    the error message.
+    """
+    cfg, passphrase = cloud_config(), load_passphrase()
+    if cfg is None or not passphrase:
+        return None
+    try:
+        upload_backup(cfg, snapshot, passphrase, socket.gethostname(), datetime.now())
+    except (S3Error, CloudBackupError) as exc:
+        log.warning("Cloud backup failed: %s", exc)
+        return str(exc)
+    _settings().setValue("cloud_backup/last_success", time.time())
+    return ""
+
+
 def _upload(snapshot, passphrase: str) -> None:
     """Runs in a background thread."""
     message = ""

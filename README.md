@@ -285,6 +285,9 @@ once a day. If one is found, a bar appears at the top of the window:
 Before every update your data is copied to the `backups` folder (**File → Open data folder**) as
 `before-update-<old version>-<date>_<time>.db`. Updating never deletes or changes your data, and an
 older MedTracker refuses to open data saved by a newer one rather than damaging it.
+When cloud backup is set up on the computer, that copy is also uploaded to the cloud first. If the
+upload fails after you clicked **Install now**, MedTracker asks whether to install anyway; when
+installing on close, the failure is only written to the log and the update goes ahead.
 
 **Help menu**
 - **Check for updates...** checks right now and tells you the result.
