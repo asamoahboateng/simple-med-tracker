@@ -19,3 +19,6 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Local secrets (MinIO keys) - never commit
+.env
