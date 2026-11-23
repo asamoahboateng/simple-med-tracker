@@ -5,7 +5,6 @@ import time
 from datetime import datetime
 
 import pytest
-from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication, QWidget
 
 import auth
@@ -19,10 +18,8 @@ NOW = datetime(2026, 11, 23, 9, 0).timestamp()
 
 
 @pytest.fixture
-def env(qapp, tmp_path, monkeypatch, memory_keyring, fake_s3):
+def env(qapp, tmp_path, monkeypatch, memory_keyring, fake_s3, isolated_settings):
     """Isolated settings, keyring and server; message boxes recorded instead of shown."""
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
-    monkeypatch.setattr(flow, "_settings", lambda: settings)
     monkeypatch.setattr(flow, "cloud_config", lambda: fake_s3.cfg)
     monkeypatch.setattr(flow.config, "backups_dir", lambda: tmp_path)
     messages = []

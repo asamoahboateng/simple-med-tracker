@@ -18,7 +18,7 @@ ADMIN = auth.User(None, "superadmin", "Superadmin", auth.SUPERADMIN)
 
 
 @pytest.fixture
-def env(qapp, tmp_path, monkeypatch, memory_keyring, fake_s3):
+def env(qapp, tmp_path, monkeypatch, memory_keyring, fake_s3, isolated_settings):
     monkeypatch.setattr(cloud_settings, "cloud_config", lambda: fake_s3.cfg)
     messages = []
     monkeypatch.setattr(cloud_settings, "show_error", lambda parent, text, title="": messages.append(text))

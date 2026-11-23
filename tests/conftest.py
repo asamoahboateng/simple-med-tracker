@@ -159,3 +159,17 @@ def qapp():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture
+def isolated_settings(qapp, tmp_path, monkeypatch):
+    """Point every QSettings the app uses at a temporary file (never this computer's settings)."""
+    from PySide6.QtCore import QSettings
+
+    from ui import cloud_backup_flow, theme, update_flow
+
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
+    for module in (cloud_backup_flow, theme, update_flow):
+        monkeypatch.setattr(module, "_settings", lambda: settings)
+    monkeypatch.setattr(update_flow.UpdateController, "start_auto_check", lambda self: None)
+    return settings
