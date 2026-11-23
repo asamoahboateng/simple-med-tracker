@@ -10,3 +10,6 @@ openpyxl==3.1.5
 
 # Finds the correct per-user data folder on Windows / macOS / Linux
 platformdirs==4.12.1
+
+# Encrypts cloud backups (AES-GCM) before they leave the computer
+cryptography==50.0.2
