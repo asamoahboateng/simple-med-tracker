@@ -17,8 +17,9 @@ import config
 import db
 from ui.add_stock import AddStockDialog
 from ui.audit import AuditPage
-from ui.cloud_backup_flow import CloudBackupController
-from ui.cloud_settings import CloudSetupDialog
+from cloud_backup import cloud_config
+from ui.cloud_backup_flow import NOT_AVAILABLE, CloudBackupController
+from ui.cloud_settings import CloudRestoreDialog, CloudSetupDialog
 from ui.dashboard import DashboardPage
 from ui.dispense import DispenseDialog
 from ui.log import LogPage
@@ -439,6 +440,7 @@ class MainWindow(QMainWindow):
             # Restoring replaces the user accounts too, so only administrators may do it.
             self._action(file_menu, "Restore from backup...", self.restore_database)
             if self.cloud:
+                self._action(file_menu, "Restore from cloud backup...", self.restore_from_cloud)
                 self._action(file_menu, "Cloud backup setup...",
                              lambda: CloudSetupDialog(self).exec())
         file_menu.addSeparator()
@@ -526,6 +528,21 @@ class MainWindow(QMainWindow):
         if Path(path).resolve() == self.db_path.resolve():
             show_error(self, "That is the database currently in use. Choose a backup file.")
             return
+        self.restore_file(path)
+
+    def restore_from_cloud(self):
+        if cloud_config() is None:
+            show_error(self, NOT_AVAILABLE, title="Cloud backup")
+            return
+        dialog = CloudRestoreDialog(self)
+        try:
+            if dialog.exec() and dialog.chosen_file():
+                self.restore_file(str(dialog.chosen_file()), f"the cloud backup\n{dialog.chosen_label}")
+        finally:
+            dialog.remove_download()
+
+    def restore_file(self, path: str, label: str = "") -> None:
+        """Replace all data with the backup file at `path`, after the checks and a safety copy."""
         newer = db.backup_version(path)
         if newer > db.SCHEMA_VERSION:
             show_error(self, str(db.NewerDatabaseError(newer)), title="Cannot restore")
@@ -535,7 +552,7 @@ class MainWindow(QMainWindow):
             return
         if not ask_yes_no(
                 self,
-                f"Restore from:\n{path}\n\nALL current data will be REPLACED by the backup.\n"
+                f"Restore from:\n{label or path}\n\nALL current data will be REPLACED by the backup.\n"
                 f"(A safety copy of the current data will be saved first.)\n\nContinue?",
                 title="Restore from backup", yes_text="Restore", no_text="Cancel"):
             return
