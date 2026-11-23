@@ -59,3 +59,11 @@ def test_unreachable_server():
 def test_http_refused_except_localhost():
     with pytest.raises(S3Error, match="must start with https://"):
         put_object(S3Config("http://s3.kalourmade.com", "b", "k", "s"), "x", b"")
+
+
+def test_already_encoded_query_and_path_are_not_encoded_twice():
+    # The URL is encoded once when it is built; signing must use it as is (MinIO rejected
+    # a list request whose prefix had a space, '=' or '/' when it was encoded twice).
+    from s3client import _canonical_path, _canonical_query
+    assert _canonical_query("prefix=x%20y%3Dz%2F&list-type=2") == "list-type=2&prefix=x%20y%3Dz%2F"
+    assert _canonical_path("/medtracker-inventory/a%20b/c.enc") == "/medtracker-inventory/a%20b/c.enc"

@@ -13,7 +13,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 import config
 
@@ -50,6 +50,18 @@ def _hmac(key: bytes, text: str) -> bytes:
     return hmac.new(key, text.encode(), hashlib.sha256).digest()
 
 
+def _canonical_path(path: str) -> str:
+    """The URL path encoded exactly once (it may arrive already encoded)."""
+    return quote(unquote(path or "/"), safe="/-_.~")
+
+
+def _canonical_query(query: str) -> str:
+    """Query parameters sorted and encoded exactly once (they may arrive already encoded)."""
+    pairs = sorted((quote(unquote(k), safe="-_.~"), quote(unquote(v), safe="-_.~"))
+                   for k, _, v in (p.partition("=") for p in query.split("&") if p))
+    return "&".join(f"{k}={v}" for k, v in pairs)
+
+
 def sign(method: str, url: str, headers: dict[str, str], payload_hash: str, cfg: S3Config,
          when: datetime) -> dict[str, str]:
     """`headers` plus the x-amz-date, x-amz-content-sha256 and Authorization headers."""
@@ -63,12 +75,10 @@ def sign(method: str, url: str, headers: dict[str, str], payload_hash: str, cfg:
     canonical_headers = {"host": parts.netloc}
     canonical_headers.update({k.lower(): " ".join(str(v).split()) for k, v in signed.items()})
     names = sorted(canonical_headers)
-    query = sorted((quote(k, safe="-_.~"), quote(v, safe="-_.~"))
-                   for k, _, v in (p.partition("=") for p in parts.query.split("&") if p))
     canonical = "\n".join([
         method,
-        quote(parts.path or "/", safe="/-_.~"),
-        "&".join(f"{k}={v}" for k, v in query),
+        _canonical_path(parts.path),
+        _canonical_query(parts.query),
         "".join(f"{n}:{canonical_headers[n]}\n" for n in names),
         ";".join(names),
         payload_hash,
