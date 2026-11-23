@@ -22,3 +22,6 @@ __pycache__/
 
 # Local secrets (MinIO keys) - never commit
 .env
+
+# MinIO keys generated at build time from .env / GitHub secrets - never commit
+cloud_keys.py

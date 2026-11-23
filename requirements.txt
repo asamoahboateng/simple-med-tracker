@@ -13,3 +13,6 @@ platformdirs==4.12.1
 
 # Encrypts cloud backups (AES-GCM) before they leave the computer
 cryptography==50.0.2
+
+# Stores the cloud backup passphrase in Windows Credential Manager / macOS Keychain
+keyring==25.7.0

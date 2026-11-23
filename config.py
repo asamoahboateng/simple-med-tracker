@@ -37,6 +37,11 @@ UPDATE_ALLOWED_HOSTS = ("github.com", "objects.githubusercontent.com",
                         "release-assets.githubusercontent.com")
 RELEASES_PAGE_URL = "https://github.com/asamoahboateng/simple-med-tracker/releases"
 
+# Cloud backup (MinIO). This is the S3 API address; https://minio.kalourmade.com is only the
+# web console. The keys are built in from cloud_keys.py (see scripts/make_cloud_keys.py).
+CLOUD_ENDPOINT = "https://s3.kalourmade.com"
+CLOUD_BUCKET = "medtracker-inventory"
+
 # Suggested units shown in the "unit" drop-down (users may type their own).
 COMMON_UNITS = [
     "tablets", "capsules", "bottles", "sachets", "vials", "ampoules",
