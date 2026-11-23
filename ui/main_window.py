@@ -8,7 +8,7 @@ from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QApplication, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
     QFrame, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -16,7 +16,9 @@ import auth
 import config
 import db
 from ui.add_stock import AddStockDialog
+from ui.about import AboutDialog
 from ui.audit import AuditPage
+from ui import cloud_backup_flow
 from cloud_backup import cloud_config
 from ui.cloud_backup_flow import NOT_AVAILABLE, CloudBackupController
 from ui.cloud_settings import CloudRestoreDialog, CloudSetupDialog
@@ -498,8 +500,8 @@ class MainWindow(QMainWindow):
         auto.setCheckable(True)
         auto.setChecked(update_flow.auto_check_enabled())
         help_menu.addSeparator()
-        about = self._action(help_menu, f"About {config.APP_NAME}", self.show_about)
-        about.setMenuRole(QAction.AboutRole)
+        about = self._action(help_menu, f"About {config.APP_NAME}...", self.show_about)
+        about.setMenuRole(QAction.NoRole)      # keep it in Help (macOS would move it elsewhere)
 
     def _toggle_auto_check(self, checked: bool):
         update_flow.set_auto_check(checked)
@@ -572,11 +574,7 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(config.data_dir())))
 
     def show_about(self):
-        QMessageBox.about(
-            self, f"About {config.APP_NAME}",
-            f"<h3>{config.APP_NAME} {config.APP_VERSION}</h3>"
-            f"<p>{config.APP_DESCRIPTION}</p>"
-            f"<p>Data folder:<br><code>{config.data_dir()}</code></p>")
+        AboutDialog(self.user, self.db_path, self.demo, cloud_backup_flow.last_success(), self).exec()
 
     def closeEvent(self, event):
         super().closeEvent(event)
