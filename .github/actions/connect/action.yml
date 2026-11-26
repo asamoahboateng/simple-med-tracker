@@ -1,0 +1,27 @@
+name: Connect to the server
+description: Fetch the server address and SSH key from Doppler and set up SSH (every deploy job runs on its own runner).
+inputs:
+  doppler-token:
+    description: Doppler service token
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install Doppler CLI
+      shell: bash
+      run: curl -Ls --tlsv1.2 https://cli.doppler.com/install.sh | sudo sh
+
+    - name: Fetch secrets and set up SSH
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+      run: |
+        server_ip=$(doppler secrets get HETZNER_SERVER_IP --plain)
+        server_user=$(doppler secrets get HETZNER_SERVER_USER --plain)
+        echo "::add-mask::$server_ip"
+        mkdir -p ~/.ssh
+        doppler secrets get HETZNER_SERVER_KEY --plain > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H "$server_ip" >> ~/.ssh/known_hosts 2>/dev/null
+        echo "SERVER=$server_user@$server_ip" >> "$GITHUB_ENV"
+        echo "SSH=ssh -i $HOME/.ssh/id_rsa -o StrictHostKeyChecking=no -o ServerAliveInterval=30" >> "$GITHUB_ENV"
