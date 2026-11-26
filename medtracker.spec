@@ -39,6 +39,10 @@ EXCLUDES = [
     "matplotlib", "pandas", "numpy", "PIL", "pytz", "dateutil",
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
     "PySide6.QtMultimedia", "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtNetwork",
+    # The sync server (server/) runs in Docker, never inside the app. Its packages are in
+    # requirements-dev.txt, so keep them out even if something ever imports them by mistake.
+    "sync_server", "fastapi", "starlette", "uvicorn", "psycopg", "psycopg_binary", "pydantic",
+    "pydantic_core", "httpx2",
 ]
 
 a = Analysis(
