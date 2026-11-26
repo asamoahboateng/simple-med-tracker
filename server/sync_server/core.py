@@ -1,24 +1,16 @@
 """
-core.py - The sync server's rules, whatever stores the data (store_memory.py, store_pg.py).
+core.py - One company's sync rules, whatever stores the data (store_memory.py, store_pg.py).
 
-Every change a computer sends is checked, numbered and stored once (repeats are ignored by
+Companies, join codes and computers are control.py's job; Core gets the computer's id. Every change a computer sends is checked, numbered and stored once (repeats are ignored by
 `change_uid`). The same medicine added on two computers becomes one: the second is merged into
 the first. Unsafe changes are refused, with the row as the server has it, so the computer can
 put it back. See docs/superpowers/specs/2026-11-25-multi-computer-sync-design.md.
 """
 
-import hashlib
-import re
-import secrets
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
-from sync_schema import (
-    BAD_CODE, INT, INT_OR_NULL, OPS, REVOKED, TABLES, TEXT, USERNAME_TAKEN, new_uid,
-)
+from sync_schema import INT, INT_OR_NULL, OPS, TEXT, USERNAME_TAKEN, Table, new_uid
 
-CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-CODE_LIFETIME = timedelta(hours=24)
 NAME_IN_USE = "That name is already used by another row."
 IN_USE = "Still used by entries on another computer."
 GONE = "Deleted on another computer."
@@ -33,68 +25,25 @@ class SyncError(Exception):
         self.message = message
 
 
-def _hash(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
-
-
-def normal_code(code: str) -> str:
-    """'abcd efgh' / 'ABCD-EFGH' -> 'ABCD-EFGH'."""
-    letters = re.sub(r"[^A-Z0-9]", "", code.upper())
-    return f"{letters[:4]}-{letters[4:]}"
-
-
-# Tables (and fields) that point at each table: a row still pointed at can't be deleted.
-REFERENCED_BY = {name: [(t.name, f) for t in TABLES.values() for f, (target, _) in t.refs.items()
-                        if target == name] for name in TABLES}
-
-
 class Core:
-    def __init__(self, store):
+    def __init__(self, store, tables: dict[str, Table]):
         self.store = store
+        self.tables = tables            # the app's synced tables (apps.APPS)
+        # Tables (and fields) that point at each table: a row still pointed at can't be deleted.
+        self.referenced_by = {name: [(t.name, f) for t in tables.values()
+                                     for f, (target, _) in t.refs.items() if target == name]
+                              for name in tables}
 
-    # --- joining -----------------------------------------------------------------
-
-    def make_code(self, now: datetime) -> str:
-        code = normal_code("".join(secrets.choice(CODE_ALPHABET) for _ in range(8)))
+    def is_empty(self) -> bool:
         with self.store.transaction():
-            self.store.add_code(_hash(code), now + CODE_LIFETIME)
-        return code
+            return self.store.is_empty()
 
-    def join(self, code: str, computer: str, now: datetime) -> dict:
-        computer = computer.strip()[:80] or "unnamed"
+    def stats(self, since: datetime) -> dict:
+        """Counts for the status page (never row data): changes since `since` (UTC), changes per
+        computer id as [since, total], and live rows per table."""
         with self.store.transaction():
-            if not self.store.use_code(_hash(normal_code(code)), now):
-                raise SyncError(404, BAD_CODE)
-            device, token = uuid.uuid4().hex, secrets.token_urlsafe(32)
-            empty = self.store.is_empty()
-            self.store.add_device(device, computer, _hash(token), now)
-        return {"device": device, "token": token, "empty": empty}
-
-    def device_for(self, token: str, now: datetime) -> str:
-        with self.store.transaction():
-            found = self.store.device_by_token(_hash(token))
-            if found is None:
-                raise SyncError(401, "This computer is not joined to sync.")
-            if found["revoked"]:
-                raise SyncError(403, REVOKED)
-            self.store.touch_device(found["device"], now)
-        return found["device"]
-
-    def computers(self) -> list[dict]:
-        with self.store.transaction():
-            return self.store.devices()
-
-    def revoke(self, name: str) -> None:
-        with self.store.transaction():
-            if not self.store.revoke(name):
-                raise SyncError(404, f"No computer called '{name}'.")
-
-    def status(self, now: datetime) -> dict:
-        """What the /status page shows. Counts and computer names only, never row data."""
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
-        with self.store.transaction():
-            found = self.store.stats(since, now)
-        found["tables"] = {name: found["tables"].get(name, 0) for name in TABLES}
+            found = self.store.stats(since)
+        found["tables"] = {name: found["tables"].get(name, 0) for name in self.tables}
         return found
 
     # --- changes -----------------------------------------------------------------
@@ -105,7 +54,7 @@ class Core:
         rejected = []
         with self.store.transaction():
             for change in changes:
-                _check_shape(change)
+                _check_shape(change, self.tables)
                 if self.store.seen(change["change_uid"]):
                     continue
                 refusal = self._apply(device, change)
@@ -122,13 +71,13 @@ class Core:
 
     def snapshot(self) -> dict:
         with self.store.transaction():
-            return {"rows": {name: self.store.live_rows(name) for name in TABLES},
+            return {"rows": {name: self.store.live_rows(name) for name in self.tables},
                     "seq": self.store.last_seq()}
 
     # --- rules -------------------------------------------------------------------
 
     def _apply(self, device, change) -> dict | None:
-        table = TABLES[change["table"]]
+        table = self.tables[change["table"]]
         key = self.store.alias(table.name, change["key"]) or change["key"]
         if change["op"] == "delete":
             return self._delete(device, change, table, key)
@@ -166,7 +115,7 @@ class Core:
         if existing is None or existing[1]:
             self.store.mark_seen(change["change_uid"])
             return None
-        if any(self.store.live_reference(t, f, key) for t, f in REFERENCED_BY[table.name]):
+        if any(self.store.live_reference(t, f, key) for t, f in self.referenced_by[table.name]):
             return _refusal(change, key, IN_USE, existing[0])
         self.store.put_row(table.name, key, existing[0], True)
         self.store.append({"change_uid": change["change_uid"], "table": table.name, "key": key,
@@ -181,7 +130,7 @@ class Core:
             raise SyncError(400, f"Unknown {table_name} row {key}.")
         data, deleted = row
         if deleted:
-            for field, (target, _) in TABLES[table_name].refs.items():
+            for field, (target, _) in self.tables[table_name].refs.items():
                 data[field] = self._live_target(target, data[field])
             self.store.put_row(table_name, key, data, False)
             self.store.append({"change_uid": new_uid(), "table": table_name, "key": key,
@@ -199,13 +148,13 @@ def _refusal(change, key, reason, current) -> dict:
             "reason": reason, "current": current}
 
 
-def _check_shape(change) -> None:
+def _check_shape(change, tables) -> None:
     if not isinstance(change, dict):
         raise SyncError(400, "A change must be an object.")
     for field in ("change_uid", "table", "key", "op"):
         if not isinstance(change.get(field), str) or not change[field].strip():
             raise SyncError(400, f"A change is missing '{field}'.")
-    if change["table"] not in TABLES:
+    if change["table"] not in tables:
         raise SyncError(400, f"Unknown table '{change['table']}'.")
     if change["op"] not in OPS:
         raise SyncError(400, f"Unknown operation '{change['op']}'.")

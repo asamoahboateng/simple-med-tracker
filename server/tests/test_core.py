@@ -1,10 +1,10 @@
-"""The sync server's rules (sync_server/core.py), on the in-memory store."""
+"""One company's sync rules (sync_server/core.py), on the in-memory store."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from sync_schema import BAD_CODE, REVOKED, USERNAME_TAKEN, new_uid
+from sync_schema import TABLES, USERNAME_TAKEN, new_uid
 from sync_server.core import Core, SyncError
 from sync_server.store_memory import MemoryStore
 
@@ -13,11 +13,12 @@ NOW = datetime(2026, 11, 25, 9, 0)
 
 @pytest.fixture
 def core():
-    return Core(MemoryStore())
+    return Core(MemoryStore(), TABLES)
 
 
 def device(core, name="pc1"):
-    return core.join(core.make_code(NOW), name, NOW)["device"]
+    """A computer's id: joining is Control's job (test_control.py); Core only records who sent what."""
+    return f"device-{name}"
 
 
 def change(table, key, op="upsert", data=None, into=None):
@@ -56,53 +57,6 @@ def stocked(core, dev, name="Paracetamol", batch_no="B001"):
     e = entry(m["key"], b["key"])
     core.push(dev, [m, b, e])
     return m, b, e
-
-
-# --- joining ---------------------------------------------------------------------
-
-def test_join_code_single_use_and_expires(core):
-    code = core.make_code(NOW)
-    assert len(code) == 9 and code[4] == "-"
-    core.join(code, "pc1", NOW)
-    with pytest.raises(SyncError) as err:
-        core.join(code, "pc2", NOW)
-    assert (err.value.status, err.value.message) == (404, BAD_CODE)
-    late = core.make_code(NOW)
-    with pytest.raises(SyncError):
-        core.join(late, "pc2", NOW + timedelta(hours=25))
-
-
-def test_join_code_ignores_case_and_dash(core):
-    code = core.make_code(NOW)
-    assert core.join(code.replace("-", "").lower(), "pc1", NOW)["device"]
-
-
-def test_first_join_reports_empty_then_not(core):
-    first = core.join(core.make_code(NOW), "pc1", NOW)
-    assert first["empty"] is True
-    core.push(first["device"], [medicine()])
-    assert core.join(core.make_code(NOW), "pc2", NOW)["empty"] is False
-
-
-def test_token_hash_only_stored(core):
-    joined = core.join(core.make_code(NOW), "pc1", NOW)
-    assert joined["token"] not in repr(vars(core.store))
-    assert core.device_for(joined["token"], NOW) == joined["device"]
-
-
-def test_unknown_token_refused(core):
-    with pytest.raises(SyncError) as err:
-        core.device_for("nope", NOW)
-    assert err.value.status == 401
-
-
-def test_revoked_device_refused(core):
-    joined = core.join(core.make_code(NOW), "front-desk", NOW)
-    core.revoke("front-desk")
-    with pytest.raises(SyncError) as err:
-        core.device_for(joined["token"], NOW)
-    assert (err.value.status, err.value.message) == (403, REVOKED)
-    assert [c["revoked"] for c in core.computers()] == [True]
 
 
 # --- pushing and pulling ---------------------------------------------------------
@@ -274,27 +228,19 @@ def test_pull_limit_and_more_flag(core):
     assert core.pull(3, limit=3)["more"] is False
 
 
-# --- status page data ------------------------------------------------------------
+# --- counts for the status page ------------------------------------------------
 
-def test_status_counts_changes_computers_rows_and_codes(core):
+def test_stats_count_changes_per_computer_and_rows(core):
     front, back = device(core, "front-desk"), device(core, "back-office")
     stocked(core, front)
     core.push(back, [medicine("Ibuprofen")])
-    core.revoke("back-office")
-    core.make_code(NOW)
-
-    status = core.status(NOW)
-    assert status["last_seq"] == 4 and status["changes_24h"] == 4
-    assert status["last_change_at"] is not None
-    assert status["tables"]["medicines"] == 2 and status["tables"]["batches"] == 1
-    assert status["tables"]["users"] == 0
-    assert status["open_codes"] == 1                       # the two used to join are not counted
-    computers = {c["name"]: c for c in status["computers"]}
-    assert computers["front-desk"]["changes_total"] == 3 and not computers["front-desk"]["revoked"]
-    assert computers["back-office"]["changes_24h"] == 1 and computers["back-office"]["revoked"]
+    stats = core.stats(datetime.now(timezone.utc) - timedelta(hours=24))
+    assert stats["last_seq"] == 4 and stats["changes_24h"] == 4 and stats["last_change_at"] is not None
+    assert stats["tables"]["medicines"] == 2 and stats["tables"]["batches"] == 1 and stats["tables"]["users"] == 0
+    assert stats["per_device"] == {front: [3, 3], back: [1, 1]}
 
 
-def test_status_of_an_empty_server(core):
-    status = core.status(NOW)
-    assert status["last_seq"] == 0 and status["last_change_at"] is None
-    assert status["computers"] == [] and status["open_codes"] == 0
+def test_stats_of_an_empty_company(core):
+    stats = core.stats(datetime.now(timezone.utc))
+    assert stats["last_seq"] == 0 and stats["last_change_at"] is None and stats["per_device"] == {}
+    assert core.is_empty()

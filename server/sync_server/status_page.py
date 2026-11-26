@@ -1,7 +1,8 @@
 """
 status_page.py - The HTML for GET /status: is the server up, and what have the computers been doing.
 
-Shows counts and computer names only (from Core.status), never medicines, patients or users.
+Shows counts and computer names per company only (from Control.status), never medicines,
+patients or users.
 """
 
 from datetime import datetime, timezone
@@ -45,8 +46,35 @@ def _when(when: datetime | None, now: datetime) -> str:
     return f'<span title="{when:%Y-%m-%d %H:%M:%S}">{ago(when, now)}</span>'
 
 
+def _company(entry: dict, now: datetime, now_utc: datetime) -> str:
+    """One company's section."""
+    title = f'<h2>{escape(entry["app"])}/{escape(entry["company"])}'
+    if entry["disabled"]:
+        title += ' <span class="pill bad">switched off</span>'
+    if entry["error"]:
+        return f'{title} <span class="pill bad">{escape(entry["error"])}</span></h2>'
+    tiles = "".join(f'<div class="tile"><span class="muted">{label}</span><b>{value}</b></div>' for label, value in (
+        ("Last change", f'#{entry["last_seq"]}'),
+        ("Last change received", _when(entry["last_change_at"], now_utc)),
+        ("Changes, last 24 h", entry["changes_24h"]),
+        ("Unused join codes", entry["open_codes"]),
+    ))
+    revoked, active = '<span class="pill bad">revoked</span>', '<span class="pill ok">active</span>'
+    rows = "".join(
+        f'<tr><td>{escape(c["name"])}</td><td>{revoked if c["revoked"] else active}</td>'
+        f'<td>{_when(c["last_seen"], now)}</td><td class="n">{c["changes_24h"]}</td>'
+        f'<td class="n">{c["changes_total"]}</td><td>{c["joined"]:%Y-%m-%d}</td></tr>'
+        for c in entry["computers"])
+    computers = (f'<table><tr><th>Computer</th><th>Status</th><th>Last seen</th><th class="n">Changes 24 h</th>'
+                 f'<th class="n">Changes total</th><th>Joined</th></tr>{rows}</table>' if rows
+                 else '<p class="muted">No computers have joined yet.</p>')
+    tables = " · ".join(f'{escape(name)} {count}' for name, count in entry["tables"].items())
+    return (f'{title}</h2><div class="tiles">{tiles}</div>{computers}'
+            f'<p class="muted">Rows: {tables}</p>')
+
+
 def render(status: dict | None, error: str | None = None) -> str:
-    """The whole page. `status` is Core.status(); None with `error` when the database failed."""
+    """The whole page. `status` is Control.status(); None with `error` when the database failed."""
     now, now_utc = datetime.now(), datetime.now(timezone.utc)
     head = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -56,31 +84,9 @@ def render(status: dict | None, error: str | None = None) -> str:
     if status is None:
         return (f'{head}<h1>MedTracker sync <span class="pill bad">Database not reachable</span></h1>'
                 f'{stamp}<p>{escape(error or "")}</p></body></html>')
-
-    last_change = status["last_change_at"]
-    tiles = "".join(f'<div class="tile"><span class="muted">{label}</span><b>{value}</b></div>' for label, value in (
-        ("Database", '<span class="pill ok">OK</span>'),
-        ("Last change", f'#{status["last_seq"]}'),
-        ("Last change received", _when(last_change, now_utc)),
-        ("Changes, last 24 h", status["changes_24h"]),
-        ("Unused join codes", status["open_codes"]),
-    ))
-
-    revoked, active = '<span class="pill bad">revoked</span>', '<span class="pill ok">active</span>'
-    rows = "".join(
-        f'<tr><td>{escape(c["name"])}</td><td>{revoked if c["revoked"] else active}</td>'
-        f'<td>{_when(c["last_seen"], now)}</td><td class="n">{c["changes_24h"]}</td>'
-        f'<td class="n">{c["changes_total"]}</td><td>{c["joined"]:%Y-%m-%d}</td></tr>'
-        for c in status["computers"])
-    computers = (f'<table><tr><th>Computer</th><th>Status</th><th>Last seen</th><th class="n">Changes 24 h</th>'
-                 f'<th class="n">Changes total</th><th>Joined</th></tr>{rows}</table>' if rows
-                 else '<p class="muted">No computers have joined yet.</p>')
-
-    tables = "".join(f'<tr><td>{escape(name)}</td><td class="n">{count}</td></tr>'
-                     for name, count in status["tables"].items())
-
+    companies = status["companies"]
+    body = ("".join(_company(entry, now, now_utc) for entry in companies) if companies
+            else '<p class="muted">No companies yet. Create one with the admin key.</p>')
     return (f'{head}<h1>MedTracker sync <span class="pill ok">Running</span></h1>{stamp}'
-            f'<div class="tiles">{tiles}</div>'
-            f'<h2>Computers</h2>{computers}'
-            f'<h2>Rows on the server</h2><table><tr><th>Table</th><th class="n">Rows</th></tr>{tables}</table>'
-            f'</body></html>')
+            f'<p class="muted">{len(companies)} {"company" if len(companies) == 1 else "companies"}</p>'
+            f'{body}</body></html>')

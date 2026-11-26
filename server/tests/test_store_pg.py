@@ -12,6 +12,7 @@ import os
 import pytest
 
 from test_core import *          # noqa: F401,F403 - every rule test runs again on Postgres
+from sync_schema import TABLES
 from sync_server.core import Core
 
 DSN = os.environ.get("SYNC_TEST_DATABASE_URL")
@@ -25,4 +26,4 @@ def core():
     store = PostgresStore(DSN)
     with psycopg.connect(DSN, autocommit=True) as conn:
         conn.execute("TRUNCATE join_codes, devices, seen_changes, changes, rows, aliases")
-    return Core(store)
+    return Core(store, TABLES)
