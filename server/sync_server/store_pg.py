@@ -133,3 +133,21 @@ class PostgresStore:
 
     def set_alias(self, table, key, into):
         self._q("INSERT INTO aliases VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", (table, key, into))
+
+    # --- status page -------------------------------------------------------------
+
+    def stats(self, since, now) -> dict:
+        """Counts for the status page: changes since `since` (UTC), computers, live rows, open codes."""
+        log = self._q("SELECT COALESCE(MAX(seq), 0) AS last_seq, MAX(received_at) AS last_change_at, "
+                      "COUNT(*) FILTER (WHERE received_at >= %s) AS changes_24h FROM changes",
+                      (since,)).fetchone()
+        computers = self._q(
+            "SELECT d.name, d.joined, d.last_seen, d.revoked, "
+            "COUNT(c.seq) FILTER (WHERE c.received_at >= %s) AS changes_24h, COUNT(c.seq) AS changes_total "
+            "FROM devices d LEFT JOIN changes c ON c.device = d.device "
+            "GROUP BY d.device ORDER BY d.joined", (since,)).fetchall()
+        tables = {r["table_name"]: r["live"] for r in self._q(
+            "SELECT table_name, COUNT(*) FILTER (WHERE NOT deleted) AS live FROM rows GROUP BY table_name")}
+        codes = self._q("SELECT COUNT(*) AS n FROM join_codes WHERE NOT used AND expires >= %s",
+                        (now,)).fetchone()["n"]
+        return {**log, "computers": computers, "tables": tables, "open_codes": codes}

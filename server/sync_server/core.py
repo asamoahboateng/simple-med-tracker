@@ -11,7 +11,7 @@ import hashlib
 import re
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sync_schema import (
     BAD_CODE, INT, INT_OR_NULL, OPS, REVOKED, TABLES, TEXT, USERNAME_TAKEN, new_uid,
@@ -88,6 +88,14 @@ class Core:
         with self.store.transaction():
             if not self.store.revoke(name):
                 raise SyncError(404, f"No computer called '{name}'.")
+
+    def status(self, now: datetime) -> dict:
+        """What the /status page shows. Counts and computer names only, never row data."""
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        with self.store.transaction():
+            found = self.store.stats(since, now)
+        found["tables"] = {name: found["tables"].get(name, 0) for name in TABLES}
+        return found
 
     # --- changes -----------------------------------------------------------------
 

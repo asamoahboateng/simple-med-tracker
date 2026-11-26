@@ -7,12 +7,14 @@ store_pg.py has the same methods for Postgres. Core calls them only inside trans
 import copy
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 
 class MemoryStore:
     def __init__(self):
         self._lock = threading.RLock()
-        self.state = {"codes": {}, "devices": {}, "seen": {}, "changes": [], "rows": {}, "aliases": {}}
+        self.state = {"codes": {}, "devices": {}, "seen": {}, "changes": [], "rows": {}, "aliases": {},
+                      "received": []}   # when each change arrived (UTC), for the status page
 
     @contextmanager
     def transaction(self):
@@ -69,6 +71,7 @@ class MemoryStore:
     def append(self, change) -> int:
         seq = len(self.state["changes"]) + 1
         self.state["changes"].append(dict(change, seq=seq))
+        self.state["received"].append(datetime.now(timezone.utc))
         self.mark_seen(change["change_uid"])
         return seq
 
@@ -116,3 +119,29 @@ class MemoryStore:
 
     def set_alias(self, table, key, into):
         self.state["aliases"][(table, key)] = into
+
+    # --- status page -------------------------------------------------------------
+
+    def stats(self, since, now) -> dict:
+        """Counts for the status page: changes since `since` (UTC), computers, live rows, open codes."""
+        received = self.state["received"]
+        per_device = {}
+        for change, at in zip(self.state["changes"], received):
+            counts = per_device.setdefault(change["device"], [0, 0])
+            counts[0] += at >= since
+            counts[1] += 1
+        tables = {}
+        for (table, _), row in self.state["rows"].items():
+            tables[table] = tables.get(table, 0) + (not row["deleted"])
+        return {
+            "last_seq": self.last_seq(),
+            "last_change_at": received[-1] if received else None,
+            "changes_24h": sum(at >= since for at in received),
+            "computers": [{"name": d["name"], "joined": d["joined"], "last_seen": d["last_seen"],
+                           "revoked": d["revoked"],
+                           "changes_24h": per_device.get(d["device"], [0, 0])[0],
+                           "changes_total": per_device.get(d["device"], [0, 0])[1]}
+                          for d in sorted(self.state["devices"].values(), key=lambda d: d["joined"])],
+            "tables": tables,
+            "open_codes": sum(not c["used"] and c["expires"] >= now for c in self.state["codes"].values()),
+        }

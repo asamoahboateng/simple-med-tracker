@@ -107,3 +107,38 @@ def test_admin_make_code_computers_and_revoke():
     assert admin.run(core, ["computers"]).endswith("REVOKED")
     with pytest.raises(SyncError):
         admin.run(core, ["revoke", "nobody"])
+
+
+# --- /status ---------------------------------------------------------------------
+
+def status_client(password="s3cret"):
+    core = Core(MemoryStore())
+    return core, TestClient(create_app(core, status_password=password))
+
+
+def test_status_off_without_a_password():
+    _, client = status_client(password=None)
+    assert client.get("/status").status_code == 404
+
+
+def test_status_needs_the_password():
+    _, client = status_client()
+    reply = client.get("/status")
+    assert reply.status_code == 401 and reply.headers["WWW-Authenticate"].startswith("Basic")
+    assert client.get("/status", auth=("admin", "wrong")).status_code == 401
+
+
+def test_status_page_shows_computers_escaped():
+    core, client = status_client()
+    core.join(core.make_code(datetime.now()), "<b>front</b>", datetime.now())
+    reply = client.get("/status", auth=("admin", "s3cret"))
+    assert reply.status_code == 200 and reply.headers["content-type"].startswith("text/html")
+    assert "&lt;b&gt;front&lt;/b&gt;" in reply.text and "<b>front</b>" not in reply.text
+    assert "Database" in reply.text and "medicines" in reply.text
+
+
+def test_status_page_when_the_database_fails():
+    core, client = status_client()
+    core.status = lambda now: (_ for _ in ()).throw(RuntimeError("connection refused"))
+    reply = client.get("/status", auth=("admin", "s3cret"))
+    assert reply.status_code == 503 and "not reachable" in reply.text

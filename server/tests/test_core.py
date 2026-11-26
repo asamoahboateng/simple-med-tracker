@@ -272,3 +272,29 @@ def test_pull_limit_and_more_flag(core):
     page = core.pull(0, limit=3)
     assert [c["seq"] for c in page["changes"]] == [1, 2, 3] and page["more"] is True
     assert core.pull(3, limit=3)["more"] is False
+
+
+# --- status page data ------------------------------------------------------------
+
+def test_status_counts_changes_computers_rows_and_codes(core):
+    front, back = device(core, "front-desk"), device(core, "back-office")
+    stocked(core, front)
+    core.push(back, [medicine("Ibuprofen")])
+    core.revoke("back-office")
+    core.make_code(NOW)
+
+    status = core.status(NOW)
+    assert status["last_seq"] == 4 and status["changes_24h"] == 4
+    assert status["last_change_at"] is not None
+    assert status["tables"]["medicines"] == 2 and status["tables"]["batches"] == 1
+    assert status["tables"]["users"] == 0
+    assert status["open_codes"] == 1                       # the two used to join are not counted
+    computers = {c["name"]: c for c in status["computers"]}
+    assert computers["front-desk"]["changes_total"] == 3 and not computers["front-desk"]["revoked"]
+    assert computers["back-office"]["changes_24h"] == 1 and computers["back-office"]["revoked"]
+
+
+def test_status_of_an_empty_server(core):
+    status = core.status(NOW)
+    assert status["last_seq"] == 0 and status["last_change_at"] is None
+    assert status["computers"] == [] and status["open_codes"] == 0

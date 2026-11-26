@@ -38,6 +38,8 @@ services:
     environment:
       # If the password has characters like @ : / # %, URL-encode them here (or use a hex password).
       DATABASE_URL: postgresql://${SYNC_DB_USER:-medtracker}:${POSTGRES_PASSWORD}@${PG_HOST:-postgres}:${PG_PORT:-5432}/${SYNC_DB:-medtracker_sync}
+      # Password for https://<SYNC_DOMAIN>/status (any username). Empty: no status page.
+      STATUS_PASSWORD: ${STATUS_PASSWORD:-}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.medtracker_sync.rule=Host(`${SYNC_DOMAIN:-sync.kalourmade.com}`)"

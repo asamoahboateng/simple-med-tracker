@@ -57,6 +57,13 @@ server {
 
 Check from any computer: `curl -s https://sync.kalourmade.com/v1/health` shows `{"ok":true}`.
 
+**Status page.** Set `STATUS_PASSWORD` in `server/.env` and restart, then open
+`https://sync.kalourmade.com/status` and sign in with any username and that password. It shows
+whether the database answers, the latest change and when it arrived, changes in the last 24 hours,
+each computer (last seen, changes sent, active or revoked), row counts per table and unused join
+codes. Counts and computer names only, never medicines, patients or users. It refreshes every
+30 seconds. With `STATUS_PASSWORD` empty the page does not exist.
+
 ## 3. Joining a computer
 
 Each computer joins once, with its own one-time code:

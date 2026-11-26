@@ -6,27 +6,32 @@ app.py - The sync server's web API (FastAPI). Run with `python -m sync_server.ap
     GET  /v1/changes    ?after=N&limit=M  -> {changes, more}
     GET  /v1/snapshot                     -> {rows, seq}
     GET  /v1/health                       -> {ok}
+    GET  /status                          -> HTML page for people (HTTP Basic, STATUS_PASSWORD)
 
 Every request but health sends X-MedTracker-Format; all but join and health send
 `Authorization: Bearer <token>`. Errors are {"message": ...}, safe to show to the user.
 """
 
+import base64
 import logging
 import os
+import secrets
 from datetime import datetime
 
 from fastapi import Body, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from sync_schema import FORMAT, TOO_OLD
+from sync_server import status_page
 from sync_server.core import Core, SyncError
 
 MAX_BODY = 20 * 1024 * 1024
 log = logging.getLogger("sync_server")
 
 
-def create_app(core: Core) -> FastAPI:
+def create_app(core: Core, status_password: str | None = None) -> FastAPI:
+    """`status_password` turns on GET /status; without one the page does not exist."""
     app = FastAPI(title="MedTracker sync", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.exception_handler(SyncError)
@@ -62,6 +67,30 @@ def create_app(core: Core) -> FastAPI:
     def health():
         return {"ok": True}
 
+    def status_allowed(authorization: str | None) -> bool:
+        scheme, _, encoded = (authorization or "").partition(" ")
+        if scheme.lower() != "basic":
+            return False
+        try:
+            _, _, password = base64.b64decode(encoded).decode().partition(":")
+        except ValueError:
+            return False
+        return secrets.compare_digest(password.encode(), status_password.encode())
+
+    @app.get("/status", response_class=HTMLResponse)
+    def status(authorization: str | None = Header(None)):
+        if not status_password:
+            return JSONResponse({"message": "Not found."}, status_code=404)
+        if not status_allowed(authorization):
+            return Response("Password needed.", status_code=401,
+                            headers={"WWW-Authenticate": 'Basic realm="MedTracker sync status"'})
+        try:
+            found = core.status(datetime.now())
+        except Exception as exc:                       # the database is down: say so, don't crash
+            log.exception("status page")
+            return HTMLResponse(status_page.render(None, f"{type(exc).__name__}: {exc}"), status_code=503)
+        return HTMLResponse(status_page.render(found))
+
     @app.post("/v1/join")
     def join(code: str = Body(...), computer: str = Body(...),
              x_medtracker_format: str | None = Header(None)):
@@ -92,7 +121,8 @@ def main() -> None:
     import uvicorn
     from sync_server.store_pg import PostgresStore
     logging.basicConfig(level=logging.INFO)
-    app = create_app(Core(PostgresStore(os.environ["DATABASE_URL"])))
+    app = create_app(Core(PostgresStore(os.environ["DATABASE_URL"])),
+                     status_password=os.environ.get("STATUS_PASSWORD") or None)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")),
                 proxy_headers=True, forwarded_allow_ips="*")
 
