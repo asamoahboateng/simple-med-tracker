@@ -1,19 +1,5 @@
--- The sync server's tables (applied at every start; safe to run again).
-
-CREATE TABLE IF NOT EXISTS join_codes (
-    code_hash TEXT PRIMARY KEY,                 -- SHA-256 of the code; the code itself is never stored
-    expires   TIMESTAMP NOT NULL,
-    used      BOOLEAN   NOT NULL DEFAULT FALSE
-);
-
-CREATE TABLE IF NOT EXISTS devices (            -- the computers that joined
-    device     TEXT PRIMARY KEY,
-    name       TEXT      NOT NULL,
-    token_hash TEXT      NOT NULL UNIQUE,       -- SHA-256 of the token
-    joined     TIMESTAMP NOT NULL,
-    last_seen  TIMESTAMP NOT NULL,
-    revoked    BOOLEAN   NOT NULL DEFAULT FALSE
-);
+-- One company's tables, in that company's own database (made by postgres.create_database;
+-- applied again at every start: safe to run again).
 
 CREATE TABLE IF NOT EXISTS seen_changes (       -- every change already handled, so repeats are ignored
     change_uid TEXT PRIMARY KEY

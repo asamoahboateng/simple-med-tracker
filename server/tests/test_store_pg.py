@@ -25,5 +25,5 @@ def core():
     from sync_server.store_pg import PostgresStore
     store = PostgresStore(DSN)
     with psycopg.connect(DSN, autocommit=True) as conn:
-        conn.execute("TRUNCATE join_codes, devices, seen_changes, changes, rows, aliases")
+        conn.execute("TRUNCATE seen_changes, changes, rows, aliases")
     return Core(store, TABLES)

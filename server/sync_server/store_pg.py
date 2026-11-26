@@ -1,8 +1,10 @@
 """
 store_pg.py - Keeps the sync server's data in Postgres. Same methods as store_memory.py.
 
-Each transaction() opens a connection, takes one lock so pushes happen one at a time (a few
-computers, so this is plenty), and commits, or rolls back if anything fails.
+PostgresStore holds one company's changes and rows, in that company's own database
+(company.sql); PostgresControlStore holds the companies, join codes and computers in the control
+database (control.sql). Each transaction() opens a connection, takes one lock so writes happen one
+at a time (plenty for a few computers per company), and commits, or rolls back if anything fails.
 """
 
 import threading
@@ -13,15 +15,20 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from sync_server.core import SyncError
+
 LOCK_ID = 4242
+UNAVAILABLE = "The company's data is not available right now."
 
 
-class PostgresStore:
+class _Postgres:
+    SCHEMA = ""
+
     def __init__(self, dsn: str):
         self.dsn = dsn
         self._local = threading.local()
         with psycopg.connect(dsn, autocommit=True) as conn:
-            conn.execute((Path(__file__).with_name("schema.sql")).read_text())
+            conn.execute(Path(__file__).with_name(self.SCHEMA).read_text())
 
     @contextmanager
     def transaction(self):
@@ -36,31 +43,18 @@ class PostgresStore:
     def _q(self, sql, params=()):
         return self._local.conn.execute(sql, params)
 
-    # --- join codes and computers ------------------------------------------------
 
-    def add_code(self, code_hash, expires):
-        self._q("INSERT INTO join_codes (code_hash, expires) VALUES (%s, %s)", (code_hash, expires))
+class PostgresStore(_Postgres):
+    """One company's data, in its own database."""
+    SCHEMA = "company.sql"
 
-    def use_code(self, code_hash, now) -> bool:
-        return self._q("UPDATE join_codes SET used = TRUE WHERE code_hash = %s AND NOT used "
-                       "AND expires >= %s", (code_hash, now)).rowcount == 1
-
-    def add_device(self, device, name, token_hash, now):
-        self._q("INSERT INTO devices (device, name, token_hash, joined, last_seen) "
-                "VALUES (%s, %s, %s, %s, %s)", (device, name, token_hash, now, now))
-
-    def device_by_token(self, token_hash):
-        return self._q("SELECT device, name, revoked FROM devices WHERE token_hash = %s",
-                       (token_hash,)).fetchone()
-
-    def touch_device(self, device, now):
-        self._q("UPDATE devices SET last_seen = %s WHERE device = %s", (now, device))
-
-    def devices(self) -> list[dict]:
-        return self._q("SELECT name, joined, last_seen, revoked FROM devices ORDER BY joined").fetchall()
-
-    def revoke(self, name) -> int:
-        return self._q("UPDATE devices SET revoked = TRUE WHERE name = %s", (name,)).rowcount
+    @contextmanager
+    def transaction(self):
+        try:
+            with super().transaction():
+                yield
+        except psycopg.errors.InvalidCatalogName:      # the database was dropped
+            raise SyncError(503, UNAVAILABLE) from None
 
     # --- changes -----------------------------------------------------------------
 
@@ -136,18 +130,71 @@ class PostgresStore:
 
     # --- status page -------------------------------------------------------------
 
-    def stats(self, since, now) -> dict:
-        """Counts for the status page: changes since `since` (UTC), computers, live rows, open codes."""
+    def stats(self, since) -> dict:
         log = self._q("SELECT COALESCE(MAX(seq), 0) AS last_seq, MAX(received_at) AS last_change_at, "
                       "COUNT(*) FILTER (WHERE received_at >= %s) AS changes_24h FROM changes",
                       (since,)).fetchone()
-        computers = self._q(
-            "SELECT d.name, d.joined, d.last_seen, d.revoked, "
-            "COUNT(c.seq) FILTER (WHERE c.received_at >= %s) AS changes_24h, COUNT(c.seq) AS changes_total "
-            "FROM devices d LEFT JOIN changes c ON c.device = d.device "
-            "GROUP BY d.device ORDER BY d.joined", (since,)).fetchall()
+        per_device = {r["device"]: [r["recent"], r["total"]] for r in self._q(
+            "SELECT device, COUNT(*) FILTER (WHERE received_at >= %s) AS recent, COUNT(*) AS total "
+            "FROM changes WHERE device IS NOT NULL GROUP BY device", (since,))}
         tables = {r["table_name"]: r["live"] for r in self._q(
             "SELECT table_name, COUNT(*) FILTER (WHERE NOT deleted) AS live FROM rows GROUP BY table_name")}
-        codes = self._q("SELECT COUNT(*) AS n FROM join_codes WHERE NOT used AND expires >= %s",
-                        (now,)).fetchone()["n"]
-        return {**log, "computers": computers, "tables": tables, "open_codes": codes}
+        return {**log, "per_device": per_device, "tables": tables}
+
+
+class PostgresControlStore(_Postgres):
+    """The companies, join codes and computers, in the control database."""
+    SCHEMA = "control.sql"
+
+    # --- companies ---------------------------------------------------------------
+
+    def get_tenant(self, app, company):
+        return self._q("SELECT * FROM tenants WHERE app = %s AND company = %s", (app, company)).fetchone()
+
+    def add_tenant(self, app, company, database, now):
+        self._q("INSERT INTO tenants (app, company, database, created) VALUES (%s, %s, %s, %s)",
+                (app, company, database, now))
+
+    def set_disabled(self, app, company, disabled) -> int:
+        return self._q("UPDATE tenants SET disabled = %s WHERE app = %s AND company = %s",
+                       (disabled, app, company)).rowcount
+
+    def tenants(self) -> list[dict]:
+        return self._q("SELECT * FROM tenants ORDER BY app, company").fetchall()
+
+    # --- join codes --------------------------------------------------------------
+
+    def add_code(self, code_hash, app, company, expires):
+        self._q("INSERT INTO join_codes (code_hash, app, company, expires) VALUES (%s, %s, %s, %s)",
+                (code_hash, app, company, expires))
+
+    def use_code(self, code_hash, now):
+        """(app, company) of a valid unused code, now marked used; None otherwise."""
+        row = self._q("UPDATE join_codes SET used = TRUE WHERE code_hash = %s AND NOT used "
+                      "AND expires >= %s RETURNING app, company", (code_hash, now)).fetchone()
+        return None if row is None else (row["app"], row["company"])
+
+    def open_codes(self, app, company, now) -> int:
+        return self._q("SELECT COUNT(*) AS n FROM join_codes WHERE app = %s AND company = %s "
+                       "AND NOT used AND expires >= %s", (app, company, now)).fetchone()["n"]
+
+    # --- computers ---------------------------------------------------------------
+
+    def add_device(self, device, app, company, name, token_hash, now):
+        self._q("INSERT INTO devices (device, app, company, name, token_hash, joined, last_seen) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)", (device, app, company, name, token_hash, now, now))
+
+    def device_by_token(self, token_hash):
+        return self._q("SELECT device, app, company, name, revoked FROM devices WHERE token_hash = %s",
+                       (token_hash,)).fetchone()
+
+    def touch_device(self, device, now):
+        self._q("UPDATE devices SET last_seen = %s WHERE device = %s", (now, device))
+
+    def devices(self, app, company) -> list[dict]:
+        return self._q("SELECT device, name, joined, last_seen, revoked FROM devices "
+                       "WHERE app = %s AND company = %s ORDER BY joined", (app, company)).fetchall()
+
+    def revoke(self, app, company, name) -> int:
+        return self._q("UPDATE devices SET revoked = TRUE WHERE app = %s AND company = %s AND name = %s",
+                       (app, company, name)).rowcount

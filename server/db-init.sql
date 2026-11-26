@@ -3,8 +3,9 @@
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'usr', :'pw')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'usr') \gexec
 
--- Keep the password in step with server/.env if it was changed.
-SELECT format('ALTER ROLE %I PASSWORD %L', :'usr', :'pw') \gexec
+-- Keep the password in step with server/.env if it was changed, and let the login create
+-- one database per company (python -m sync_server.admin create APP COMPANY).
+SELECT format('ALTER ROLE %I CREATEDB PASSWORD %L', :'usr', :'pw') \gexec
 
 SELECT format('CREATE DATABASE %I OWNER %I', :'db', :'usr')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db') \gexec
