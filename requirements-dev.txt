@@ -2,3 +2,8 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 pyinstaller==6.22.3
 pytest==9.1.1
+# The sync server and its tests (server/); never bundled into the app
+fastapi==0.165.0
+uvicorn==0.54.0
+psycopg[binary]==3.3.9
+httpx2==2.16.2

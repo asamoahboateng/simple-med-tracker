@@ -25,3 +25,6 @@ __pycache__/
 
 # MinIO keys generated at build time from .env / GitHub secrets - never commit
 cloud_keys.py
+
+# Sync server settings (holds the database password)
+server/.env

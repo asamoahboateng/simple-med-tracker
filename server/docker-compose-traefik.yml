@@ -1,0 +1,68 @@
+# MedTracker sync server behind an existing Traefik, using an existing Postgres.
+# Both live on the external km_traefik-public network (Postgres answers as "postgres" there).
+# Settings come from server/.env (copy .env.traefik.example).
+#   docker compose -f server/docker-compose-traefik.yml up -d --build
+services:
+  # One-shot: creates the sync server's login and database on the shared Postgres if missing.
+  # The API creates its own tables on start (sync_server/schema.sql).
+  db_init:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGHOST: ${PG_HOST:-postgres}
+      PGPORT: ${PG_PORT:-5432}
+      PGUSER: ${PG_ADMIN_USER:?Set PG_ADMIN_USER in server/.env}
+      PGPASSWORD: ${PG_ADMIN_PASSWORD:?Set PG_ADMIN_PASSWORD in server/.env}
+      PGDATABASE: postgres
+      SYNC_DB: ${SYNC_DB:-medtracker_sync}
+      SYNC_DB_USER: ${SYNC_DB_USER:-medtracker}
+      SYNC_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in server/.env}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until pg_isready -q; do echo "Waiting for $$PGHOST:$$PGPORT..."; sleep 2; done
+        exec psql -v ON_ERROR_STOP=1 \
+          -v db="$$SYNC_DB" -v usr="$$SYNC_DB_USER" -v pw="$$SYNC_DB_PASSWORD" \
+          -f /db-init.sql
+    volumes:
+      - ./db-init.sql:/db-init.sql:ro
+    networks:
+      - km_traefik-public
+
+  api:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: medtracker_sync_api:latest
+    restart: unless-stopped
+    environment:
+      # If the password has characters like @ : / # %, URL-encode them here (or use a hex password).
+      DATABASE_URL: postgresql://${SYNC_DB_USER:-medtracker}:${POSTGRES_PASSWORD}@${PG_HOST:-postgres}:${PG_PORT:-5432}/${SYNC_DB:-medtracker_sync}
+      # Password for https://<SYNC_DOMAIN>/status (any username). Empty: no status page.
+      STATUS_PASSWORD: ${STATUS_PASSWORD:-}
+      # Key for https://<SYNC_DOMAIN>/v1/admin/... (creating companies). Empty: those addresses are off;
+      # the admin command on the server works either way.
+      ADMIN_KEY: ${ADMIN_KEY:-}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.medtracker_sync.rule=Host(`${SYNC_DOMAIN:-sync.kalourmade.com}`)"
+      - "traefik.http.routers.medtracker_sync.entrypoints=websecure"
+      - "traefik.http.routers.medtracker_sync.tls=true"
+      # Uncomment if your Traefik issues certificates itself (use your resolver's name):
+      # - "traefik.http.routers.medtracker_sync.tls.certresolver=letsencrypt"
+      - "traefik.http.services.medtracker_sync.loadbalancer.server.port=8000"
+      - "traefik.docker.network=km_traefik-public"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      db_init:
+        condition: service_completed_successfully
+    networks:
+      - km_traefik-public
+
+networks:
+  km_traefik-public:
+    external: true

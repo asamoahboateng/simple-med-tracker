@@ -1,0 +1,6 @@
+# Only the sync server is built with Docker; send it nothing else.
+*
+!sync_schema.py
+!server/requirements.txt
+!server/sync_server
+**/__pycache__

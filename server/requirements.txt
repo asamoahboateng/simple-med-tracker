@@ -1,0 +1,4 @@
+# MedTracker sync server (runs in Docker: see docs/sync-server.md)
+fastapi==0.165.0
+uvicorn==0.54.0
+psycopg[binary]==3.3.9

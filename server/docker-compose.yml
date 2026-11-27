@@ -1,0 +1,36 @@
+# MedTracker sync server: Postgres + the API. Settings come from server/.env (copy .env.example).
+#   docker compose -f server/docker-compose.yml up -d --build
+# The API listens on 127.0.0.1 only; your HTTPS proxy forwards sync.kalourmade.com to it.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: medtracker_sync
+      POSTGRES_USER: medtracker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in server/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medtracker -d medtracker_sync"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://medtracker:${POSTGRES_PASSWORD}@db:5432/medtracker_sync
+      STATUS_PASSWORD: ${STATUS_PASSWORD:-}   # for /status; empty: no status page
+      ADMIN_KEY: ${ADMIN_KEY:-}               # for /v1/admin/... (creating companies); empty: off
+    ports:
+      - "127.0.0.1:${SYNC_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

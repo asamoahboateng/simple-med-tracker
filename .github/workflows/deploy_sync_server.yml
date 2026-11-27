@@ -1,0 +1,121 @@
+name: Deploy sync server
+
+# Runs on a push to main only when the latest commit message contains [sync], e.g.
+#   git commit -m "Sync server: faster pulls [sync]"
+# or by hand from the Actions tab.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# One deploy at a time; a newer push waits for the running one instead of cutting it off half-way.
+concurrency:
+  group: deploy-sync-server
+  cancel-in-progress: false
+
+jobs:
+  # 1. Cheap checks on the runner, before the server is touched. Every later job needs this one,
+  #    so when it is skipped (no [sync]) the whole workflow is skipped.
+  check:
+    name: Check
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[sync]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose file is valid
+        run: docker compose -f server/docker-compose-traefik.yml --env-file server/.env.traefik.example config --quiet
+
+      - name: Python compiles
+        run: python3 -m py_compile sync_schema.py server/sync_server/*.py
+
+  # 2. Copy the code to the server (the running API keeps serving).
+  #    Layout on the server mirrors the repo, because the image is built from the repo root:
+  #    ~/medtracker_sync/{.dockerignore, sync_schema.py, server/...}
+  sync:
+    name: Sync code
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/connect
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Prepare the remote directory
+        # Owning the directory first avoids rsync's error 23.
+        run: |
+          $SSH $SERVER "mkdir -p ~/medtracker_sync && sudo chown -R \$(whoami):\$(whoami) ~/medtracker_sync || true"
+
+      - name: Rsync to server
+        # server/.env holds the real passwords: it is never sent, and --delete leaves it alone.
+        run: |
+          rsync -az --delete --stats --relative \
+            --no-perms --no-owner --no-group \
+            --exclude '.env' --exclude '__pycache__' --exclude 'tests' \
+            -e "$SSH" \
+            ./.dockerignore ./sync_schema.py ./server \
+            $SERVER:~/medtracker_sync/
+
+      - name: server/.env exists
+        run: |
+          $SSH $SERVER "test -f ~/medtracker_sync/server/.env" || {
+            echo "::error::~/medtracker_sync/server/.env is missing on the server. Copy server/.env.traefik.example there once and fill in the passwords."
+            exit 1
+          }
+
+  # 3. Build the image on the server while the old container is still running (no downtime).
+  build:
+    name: Build image
+    needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/connect
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Build
+        run: $SSH $SERVER "cd ~/medtracker_sync && docker compose -f server/docker-compose-traefik.yml build"
+
+  # 4. Swap to the new container (db_init runs first; a few seconds of downtime).
+  deploy:
+    name: Restart services
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/connect
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Start services
+        run: $SSH $SERVER "cd ~/medtracker_sync && docker compose -f server/docker-compose-traefik.yml up -d --remove-orphans"
+
+  # 5. Is it up? Containers listed, and the API answers its health check through Traefik.
+  verify:
+    name: Verify
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/connect
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Containers
+        run: $SSH $SERVER "cd ~/medtracker_sync && docker compose -f server/docker-compose-traefik.yml ps -a"
+
+      - name: Health check
+        run: |
+          domain=$($SSH $SERVER "grep -E '^SYNC_DOMAIN=' ~/medtracker_sync/server/.env | cut -d= -f2")
+          domain=${domain:-sync.kalourmade.com}
+          curl -fsS --retry 20 --retry-delay 6 --retry-all-errors --max-time 10 "https://$domain/v1/health"
+          echo
+          echo "https://$domain/v1/health answers"
