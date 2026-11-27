@@ -8,11 +8,13 @@
 
 **Tech Stack:** App: Python 3.12, PySide6, SQLite, `urllib`, `keyring`. Server: Python 3.12, FastAPI, uvicorn, psycopg 3, Postgres 16, Docker Compose. Tests: pytest.
 
-**Spec:** `docs/superpowers/specs/2026-11-25-multi-computer-sync-design.md`
+**Spec:** `docs/superpowers/specs/2026-11-25-multi-computer-sync-design.md`, with addresses per company from `docs/superpowers/specs/2026-11-26-multi-tenant-sync-design.md`
+
+**Status (2026-11-27):** Tasks 3 and 4 (the server) are done and deployed, rebuilt for many apps and companies by `2026-11-26-multi-tenant-sync.md`. Still to build: Tasks 1, 2 and 5–9 (the app). Where this plan says `endpoint`, it now means the company address `<server>/v1/<app>/<company>` (see Task 5).
 
 ## Global Constraints
 
-- Sync endpoint `https://sync.kalourmade.com` in `config.SYNC_ENDPOINT`; HTTPS only, except `http://127.0.0.1`/`localhost` (tests), as in `s3client._url`.
+- Sync server `https://sync.kalourmade.com` in `config.SYNC_SERVER`; each computer syncs with its company address `<SYNC_SERVER>/v1/medtracker/<company>`, saved as `sync_state['endpoint']` from the join answer; HTTPS only, except `http://127.0.0.1`/`localhost` (tests), as in `s3client._url`.
 - Data format sent with every request: header `X-MedTracker-Format: 1` (`sync_schema.FORMAT = 1`).
 - Local schema version becomes `SCHEMA_VERSION = 9`.
 - Only password and PIN **hashes** travel; never plain passwords. The token is never logged or shown.
@@ -263,19 +265,19 @@ def test_invalid_change_400()
 
 **Files:**
 - Create: `sync_http.py`, `sync_engine.py`
-- Modify: `config.py` (`SYNC_ENDPOINT = "https://sync.kalourmade.com"`), `tests/conftest.py` (fixture `sync_server`)
+- Modify: `config.py` (`SYNC_SERVER = "https://sync.kalourmade.com"`), `tests/conftest.py` (fixture `sync_server`)
 - Test: `tests/test_sync_engine.py`
 
 **Interfaces:**
-- Consumes: Task 2 (`pending_changes`, `mark_sent`, `apply_changes`, `load_snapshot`, `seed_outbox`, `is_joined`, `device_id`), Task 4 (`create_app`, `Core`, `MemoryStore`).
+- Consumes: Task 2 (`pending_changes`, `mark_sent`, `apply_changes`, `load_snapshot`, `seed_outbox`, `is_joined`, `device_id`), the server (`create_app(control, admin_key=...)`, `store_memory.memory_control()`).
 - Produces:
-  - `sync_http`: `class SyncHTTPError(Exception)` (`.message`, `.status` — 0 for network); messages `OFFLINE`, `REVOKED`, `TOO_OLD`, `BAD_CODE` (Global Constraints) for network / 401 or 403 / 426 / 404; other statuses → `"The sync server had a problem ({status}). Try again later."`. Functions: `join(endpoint, code, computer) -> dict`, `push(endpoint, token, changes) -> dict`, `pull(endpoint, token, after, limit=1000) -> dict`, `snapshot(endpoint, token) -> dict`. JSON over `urllib`, timeout 30 s, `User-Agent` like `s3client.USER_AGENT`, header `X-MedTracker-Format`.
+  - `sync_http`: `class SyncHTTPError(Exception)` (`.message`, `.status` — 0 for network); messages `OFFLINE`, `REVOKED`, `TOO_OLD`, `BAD_CODE` (Global Constraints) for network / 401 or 403 / 426 / 404; other statuses → `"The sync server had a problem ({status}). Try again later."`. Functions: `join(server, code, computer) -> dict` (posts to `<server>/v1/join`; the answer has `device`, `token`, `empty`, `app`, `company`), `company_endpoint(server, app, company) -> str` (→ `<server>/v1/<app>/<company>`), `push(endpoint, token, changes) -> dict`, `pull(endpoint, token, after, limit=1000) -> dict`, `snapshot(endpoint, token) -> dict`. JSON over `urllib`, timeout 30 s, `User-Agent` like `s3client.USER_AGENT`, header `X-MedTracker-Format`.
   - `sync_engine`:
     - `load_token() -> str`, `save_token(token: str) -> None` (keyring `"MedTracker sync"`/`"token"`; errors → `""` / `SyncHTTPError`-free `RuntimeError` with message "This computer cannot store the sync key securely.").
     - `@dataclass SyncResult: sent: int = 0, received: int = 0, waiting: int = 0, applied: Applied | None = None, error: str = "", status: int = 0, refused_users: list[str] = field(default_factory=list)`.
     - `sync_once(conn, endpoint: str, token: str) -> SyncResult` — push pending in 500s (`mark_sent` after each success; refusals: apply each `current` with recording off, or delete the local row when `current` is None — a refused new user's pending account is removed and named in `refused_users` so the UI says "Username taken — register again"); then pull in 1000s until `more` is false and apply. Network/HTTP failure stops the round and returns `error` (and `status`), keeping what already succeeded. `waiting` = outbox count afterwards.
-    - `join_computer(conn, endpoint: str, code: str, computer: str, mode: str, joined: dict | None = None) -> None` — `mode` in `"first" | "shared" | "merge"`; calls `join` unless `joined` (an earlier `sync_http.join` result) is given, saves token, sets `device_id`, `joined=1`, recording on; `"first"`/`"merge"`: `seed_outbox` and push everything; then (all modes) `snapshot` → `load_snapshot`. Recording stays on afterwards. Making the local safety backup is the caller's job (UI).
-  - Fixture `sync_server` in `tests/conftest.py`: runs `uvicorn` with `create_app(Core(MemoryStore()))` in a thread on a free `127.0.0.1` port; yields an object with `.endpoint`, `.core`, `.stop()`/`.start()` (to simulate the internet going down), and `.code()` (a fresh join code).
+    - `join_computer(conn, server: str, code: str, computer: str, mode: str, joined: dict | None = None) -> None` — saves `sync_state['endpoint'] = company_endpoint(server, joined['app'], joined['company'])` and syncs with that address from then on; a 403 from it is shown as `REVOKED` — `mode` in `"first" | "shared" | "merge"`; calls `join` unless `joined` (an earlier `sync_http.join` result) is given, saves token, sets `device_id`, `joined=1`, recording on; `"first"`/`"merge"`: `seed_outbox` and push everything; then (all modes) `snapshot` → `load_snapshot`. Recording stays on afterwards. Making the local safety backup is the caller's job (UI).
+  - Fixture `sync_server` in `tests/conftest.py`: runs `uvicorn` with `create_app(memory_control(), admin_key="test")` in a thread on a free `127.0.0.1` port, with company `medtracker/test` created; yields an object with `.server`, `.endpoint` (the company address), `.control`, `.stop()`/`.start()` (to simulate the internet going down), and `.code()` (a fresh join code).
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_sync_engine.py` (two databases joined to one `sync_server`; `a` joins `"first"`, `b` joins `"shared"`):
 
@@ -334,13 +336,13 @@ def test_below_zero_status():
 - Test: `tests/test_sync_flow.py`
 
 **Interfaces:**
-- Consumes: `sync_engine.sync_once`, `load_token`, `sync_local.is_joined`, `pending_changes`, `config.SYNC_ENDPOINT`.
+- Consumes: `sync_engine.sync_once`, `load_token`, `sync_local.is_joined`, `pending_changes`, `sync_state['endpoint']`.
 - Produces:
   - `ui.sync_flow.indicator_text(result: SyncResult | None, busy: bool) -> str` and `tooltip_text(last_success: float | None, now: float, error: str) -> str` (pure).
   - `class SyncController(QObject)` — `__init__(window, db_path: Path, conn, user)`; `.button` (QPushButton, `kind=link`, placed next to `☁ Back up`); `sync_now() -> None`; `notify_saved() -> None` (called from `window.data_changed`: starts a sync soon). One round at a time across window rebuilds (module-level `_busy`, `_active` weakref, relay signal — the `ui/cloud_backup_flow.py` pattern). Rounds run in a thread with **their own** `db.connect(db_path)`. QTimers: fetch every 60 000 ms; after a failed round, retry every 30 000 ms. After a round that applied changes: `window.data_changed()`; if `applied.users_changed`: `window.check_access()` (signs out a revoked/demoted user). Records `sync/last_success` in QSettings. `flush(timeout_s: float = 3.0) -> None` for close.
   - 24-hour warning (the spec's banner, shown in the indicator instead so nothing new is added above the pages): more than 24 h since `last_success` → indicator text `"● Not synced for {days} days"` in amber, with the last error in the tooltip.
   - `MainWindow`: `self.sync = SyncController(...)` only when not demo and `is_joined(conn)`; **File → Sync now** (Ctrl+Shift+S) when joined; **File → Sync setup…** (superadmin, not demo) always; when joined, **Restore from backup…** and **Restore from cloud backup…** are replaced by **Reset from shared data…** (superadmin). `closeEvent` calls `self.sync.flush()`.
-  - `AboutDialog` / `system_details(...)` gains rows `Sync server` (endpoint or "Not joined"), `This computer` (device name), `Last sync`.
+  - `AboutDialog` / `system_details(...)` gains rows `Sync server` (company address or "Not joined"), `This computer` (device name), `Last sync`.
 
 - [ ] **Step 1: Write the failing tests** (`qapp`, `isolated_settings`, `sync_server`, a joined database):
 
@@ -397,7 +399,7 @@ def test_reset_from_shared_sends_pending_first()
 **Files:**
 - Modify: `README.md` (Sync section: what it does, joining, the indicator, offline, below zero, reset, restore hidden while joined; files table: `sync_*.py`, `server/`), `medtracker.spec` (only if PyInstaller misses a module; `sync_*` are plain imports), `.github/workflows/build.yml` (run `server/tests` too; optional Postgres service with `SYNC_TEST_DATABASE_URL`)
 
-- [ ] **Step 1:** Start the stack (`docker compose -f server/docker-compose.yml up -d --build`), make two codes, run the app twice against `http://127.0.0.1:8000` using two data folders (`MEDTRACKER_SYNC_ENDPOINT` env override read by `config.SYNC_ENDPOINT` only when set — add with a test in `tests/test_sync_engine.py`), join first/shared, dispense on one, click **Sync now** on the other. Expected: the entry and the lower stock appear; indicator `● Up to date`. Stop the stack, dispense: indicator `● Offline — 1 waiting`; start it: sent within 30 s.
+- [ ] **Step 1:** Start the stack (`docker compose -f server/docker-compose.yml up -d --build`), make two codes, run the app twice against `http://127.0.0.1:8000` using two data folders (`MEDTRACKER_SYNC_SERVER` and `MEDTRACKER_DATA_DIR` env overrides read by `config` only when set — add with a test in `tests/test_sync_engine.py`; codes from `python -m sync_server.admin create medtracker test`), join first/shared, dispense on one, click **Sync now** on the other. Expected: the entry and the lower stock appear; indicator `● Up to date`. Stop the stack, dispense: indicator `● Offline — 1 waiting`; start it: sent within 30 s.
 - [ ] **Step 2:** Update README and workflow; run the whole suite. Expected: PASS.
 - [ ] **Step 3: Commit** `git commit -m "Sync: README, workflow and local end-to-end check"`
 
