@@ -62,7 +62,9 @@ jobs:
       - name: server/.env exists
         run: |
           $SSH $SERVER "test -f ~/medtracker_sync/server/.env" || {
-            echo "::error::~/medtracker_sync/server/.env is missing on the server. Copy server/.env.traefik.example there once and fill in the passwords."
+            echo "Looked as user, in home folder, and found:"
+            $SSH $SERVER 'whoami; echo $HOME; ls -la ~/medtracker_sync/server/' || true
+            echo "::error::~/medtracker_sync/server/.env is missing on the server (path shown above). Log in as that user, copy server/.env.traefik.example to .env there and fill in the passwords."
             exit 1
           }
 
